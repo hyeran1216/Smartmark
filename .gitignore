@@ -1,0 +1,27 @@
+# API 키와 민감한 정보가 포함된 설정 파일
+config.js
+
+# 개발 환경 파일들
+.DS_Store
+.vscode/
+*.log
+
+# 임시 파일들
+*.tmp
+*.temp
+*~
+
+# 압축 파일들 (배포용)
+*.zip
+*.crx
+
+# Node.js 관련 (필요시)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 개인 메모나 테스트 파일들
+test/
+notes.md
+TODO.md

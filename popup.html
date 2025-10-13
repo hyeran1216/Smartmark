@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>SmartMark</title>
+    <style>
+        #manageButton { 
+            margin-top: 10px;
+            background-color: #6c757d; 
+        }
+        #manageButton:hover { 
+            background-color: #5a6268; 
+        }
+        button { 
+            margin-top: 10px;
+            padding: 10px; 
+            width: full; 
+            background-color: #007bff; 
+            color: white;
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            transition: background-color 0.2s; 
+        }
+        button:hover { background-color: #0056b3; }
+
+        #mode-switcher {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        
+        #mode-switcher button {
+            flex-grow: 1;
+            padding: 10px 5px;
+            border: none;
+            background-color: #fff;
+            color: #4285f4;
+            cursor: pointer;
+            font-weight: bold;
+            border-radius: 4px 4px 0 0;
+            transition: background-color 0.2s, color 0.2s;
+            margin-top: 0 !important;
+            width: 50% !important;
+        }
+        
+        #mode-switcher button:hover {
+            background-color: #f2f2f2 !important;
+        }
+        
+        .active-mode {
+            background-color: white !important;
+            color: #4285f4 !important;
+            border-bottom: 3px solid #4285f4 !important;
+        }
+
+        #search-mode { padding: 10px; }
+        #search-container { display: flex; margin-bottom: 10px;}
+        #searchInput { flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 0 !important; }
+        #searchButton { margin-left: 8px; padding: 8px; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 0 !important; white-space: nowrap;}
+        #results-output { max-height: 250px; overflow-y: auto; margin-top: 10px; }
+        .result-card { border: 1px solid #eee; padding: 10px; margin-bottom: 8px; border-radius: 4px; }
+        .result-title { font-weight: bold; font-size: 1.1em; color: #1a0dab; cursor: pointer; }
+        .result-url { font-size: 0.8em; color: #006621; }
+        .result-score { float: right; font-size: 0.8em; color: #f4b400; }
+
+        body { width: 300px; padding: 15px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        label { display: block; margin-top: 10px; font-weight: 600; color: #333; }
+        input[type="text"], select { width: 100%; padding: 8px; box-sizing: border-box; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
+        #favIcon { width: 16px; height: 16px; margin-right: 5px; vertical-align: middle; }
+    </style>
+</head>
+<body>
+    <div id="mode-switcher">
+        <button id="saveModeButton" class="active-mode">북마크 저장</button>
+        <button id="searchModeButton">검색</button>
+    </div>
+    <div id="save-bookmark-mode">
+        <img id="favIcon" alt="Favicon" style="display: none;">
+        <label for="titleInput">제목</label>
+        <input type="text" id="titleInput">
+
+        <label for="urlInput">URL</label>
+        <input type="text" id="urlInput" readonly>
+
+        <label for="folderSelect">폴더</label>
+        <select id="folderSelect">
+            <option value="">폴더 로딩...</option>
+        </select>
+
+        <div id="status" style="color: green; margin: 15px 0;">북마크 저장...</div>
+
+        <button id="saveButton">북마크 저장</button>
+        <button id="manageButton">북마크 관리 페이지 열기</button>
+    </div>
+    <div id="search-mode" style="display:none;">
+        <div id="search-container">
+            <input type="text" id="searchInput" placeholder="검색할 내용을 입력하세요..." />
+            <button id="searchButton">검색</button>
+        </div>
+        <div id="search-status" style="margin-bottom: 10px; font-size: 0.9em;"></div>
+        <div id="results-output"></div>
+    </div>
+    
+    <script src="config.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>

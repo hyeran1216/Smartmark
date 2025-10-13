@@ -1,0 +1,19 @@
+{
+    "manifest_version": 3,
+    "name": "SmartMark",
+    "version": "1.0",
+    "description": "스마트 개인화 북마크 확장 프로그램",
+    "action": {
+      "default_popup": "popup.html"
+    },
+    "permissions": [
+      "activeTab",    
+      "bookmarks",
+      "scripting",
+      "storage" 
+    ],
+    "host_permissions": [
+    "<all_urls>",
+    "https://cdn.jsdelivr.net/*"    
+    ]
+  }
