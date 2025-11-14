@@ -10,9 +10,12 @@ chrome.runtime.onMessage.addListener(
                 // 가시적인 텍스트만 추출하는 함수
                 function getVisibleText(element) {
                     let text = '';
+                    
+                    // 무시할 태그 목록 (헤더, 푸터, 내비게이션, 광고 등)
+                    const IGNORE_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'HEADER', 'FOOTER', 'NAV', 'ASIDE', 'FORM'];
                     if (element.nodeType === 3) { // 텍스트 노드
                         text += element.nodeValue;
-                    } else if (element.nodeType === 1 && element.tagName !== 'SCRIPT' && element.tagName !== 'STYLE' && element.tagName !== 'NOSCRIPT') {
+                    } else if (element.nodeType === 1 && !IGNORE_TAGS.includes(element.tagName)) {
                         for (const child of element.childNodes) {
                             text += getVisibleText(child) + ' ';
                         }

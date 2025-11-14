@@ -10,10 +10,23 @@
       "activeTab",    
       "bookmarks",
       "scripting",
-      "storage" 
+      "storage",
+      "contextMenus",
+      "tabs"
     ],
     "host_permissions": [
-    "<all_urls>",
-    "https://cdn.jsdelivr.net/*"    
-    ]
+        "<all_urls>"
+    ],
+    "background": {
+      "service_worker": "background.js"
+    },
+    "web_accessible_resources": [
+      {
+        "resources": ["textEmbedder.js", "utils/tfidf.js"],
+        "matches": ["<all_urls>"]
+      }
+    ],
+    "content_security_policy": {
+      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+    }
   }

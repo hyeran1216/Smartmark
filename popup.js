@@ -30,6 +30,14 @@ async function main() {
 
         saveModeButton.addEventListener('click', () => switchMode('save'));
         searchModeButton.addEventListener('click', () => switchMode('search'));
+        
+        // 검색 기능 이벤트 리스너 추가
+        document.getElementById('searchButton').addEventListener('click', handleSearch);
+        document.getElementById('searchInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleSearch();
+            }
+        });
     } catch (error) {
         console.error("초기화 중 오류 발생:", error);
         document.getElementById('status').textContent = `오류: ${error.message}`;
@@ -170,21 +178,23 @@ async function handleSave() {
         // 1. 페이지 콘텐츠 추출 및 요약 생성 (가장 오래 걸리는 단계)
         console.log('[DEBUG] 1. 페이지 콘텐츠 추출 시도...');
         const content = await getPageContentForSummary();
-        let summary = "요약 정보 없음";
+        let summary = "No summary information";
 
         if (content) {
             console.log(`[DEBUG] 2. 콘텐츠 추출 성공. 텍스트 길이: ${content.length}`);
             
             document.getElementById('status').textContent = 'Gemini API 호출 중...';
             console.log('[DEBUG] 3. Gemini API 호출 시도...');
-            summary = await summarizePageContent(content);
+            const result = await summarizePageContent(content); 
+            englishSummary = result.summary;
+            englishKeySnippet = result.keySnippet;
             console.log('[DEBUG] 4. Gemini API 호출 성공.');
         } else {
             // 이 로그가 뜬다면 content.js 또는 manifest.json 설정 문제일 수 있습니다.
             console.warn('[DEBUG] 2. 페이지 텍스트 추출 실패. 요약 없이 저장.');
             document.getElementById('status').textContent = '페이지 텍스트 추출 실패. 요약 없이 저장합니다.';
         }
-
+      
         // 2. 썸네일 API 호출
         document.getElementById('status').textContent = '썸네일 생성 중...';
         console.log('[DEBUG] GCF 호출 직전!');
@@ -194,12 +204,82 @@ async function handleSave() {
         // 3. 실제 북마크 저장
         document.getElementById('status').textContent = '북마크 저장 중...';
         const newBookmark = await saveBookmark(title, currentUrl, selectedFolderId);
+        const englishTitleForEmbedding = await window.textEmbedder._translateText(title, 'en');
         
-        // 4. 요약 정보와 썸네일 URL을 로컬 스토리지에 저장
-        await saveSummaryAndThumbnail(newBookmark.id, summary, thumbnailUrl);
+        // 4. 임베딩 생성을 위한 메타데이터 준비
+        // 폴더 이름 가져오기
+        const folderName = await getFolderNameById(selectedFolderId);
+        const englishFolderName = await window.textEmbedder._translateText(folderName, 'en');
+        
+        const metadata = {
+            url: newBookmark.url || currentUrl,
+            title: englishTitleForEmbedding,
+            details: englishSummary,
+            fullContent: englishKeySnippet,
+            category: englishFolderName,
+            dateAdded: newBookmark.dateAdded || Date.now(),
+            id: newBookmark.id,
+        };
+        console.log('[DEBUG] 4. 임베딩 생성을 위한 메타데이터 준비:', metadata);
+        
+        // 5. 임베딩 생성 (textEmbedder 사용)
+        document.getElementById('status').textContent = 'AI 임베딩 생성 중...';
+        let embeddingDetails = null;
+        console.log('[DEBUG] AI 임베딩 생성중');
+        
+        if (window.textEmbedder) {
+            try {
+                // textEmbedder 초기화 (필요시)
+                if (!window.textEmbedder.isModelLoaded()) {
+                    await window.textEmbedder.initialize({
+                        onProgress: (progress) => {
+                            document.getElementById('status').textContent = `임베딩 모델 로딩: ${(progress.progress * 100).toFixed(0)}%`;
+                        }
+                    });
+                }
+
+                // TF-IDF 모델 로드 및 설정
+                const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
+                const savedTfIdfModel = await chrome.storage.local.get(TFIDF_MODEL_KEY);
+                if (savedTfIdfModel[TFIDF_MODEL_KEY] && window.TFIDF) {
+                    const tfidfModel = new window.TFIDF();
+                    tfidfModel.deserialize(savedTfIdfModel[TFIDF_MODEL_KEY]);
+                    window.textEmbedder.setTfIdfModel(tfidfModel);
+                    console.log('[DEBUG] TF-IDF 모델 로드 및 설정 완료');
+                }
+                
+                embeddingDetails = await window.textEmbedder.detailsEmbedding(metadata);
+                console.log('[DEBUG] 임베딩 생성 완료');
+            } catch (error) {
+                console.error('[DEBUG] 임베딩 생성 실패:', error);
+                embeddingDetails = metadata; // 임베딩 없이 저장
+            }
+        } else {
+            console.warn('[DEBUG] textEmbedder를 사용할 수 없습니다.');
+            embeddingDetails = metadata; // 임베딩 없이 저장
+        }
+
+        // const userTargetLangCode = await getUserTargetLanguage();
+        const userTargetLangCode = 'ko';
+        const uiSummary = await window.textEmbedder._translateText(englishSummary, userTargetLangCode);
+        console.log('[DEBUG] UI 표시용 번역 완료:', uiSummary);
+
+        // 6. 요약 정보, 썸네일 URL, 임베딩을 로컬 스토리지에 저장
+        await saveSummaryAndThumbnailWithEmbedding(newBookmark.id, title, englishSummary, englishKeySnippet, uiSummary, englishFolderName, thumbnailUrl, embeddingDetails?.embedding, embeddingDetails?.tfidfVector);
+
+        // 7. TF-IDF 모델 재구축 (새 북마크 추가됨)
+        await rebuildTfIdfModel();
+        
+        // 임베딩 정보 콘솔에 출력 (디버그용)
+        if (embeddingDetails?.embedding) {
+            console.log('[DEBUG] 생성된 임베딩 정보:', {
+                dimension: embeddingDetails.embedding.length,
+                sample: embeddingDetails.embedding.slice(0, 5) // 처음 5개 값만 표시
+            });
+        }
         
         // 저장 성공 시 상태 업데이트 및 팝업 닫기
-        document.getElementById('status').textContent = `저장 완료! 요약: "${summary}"`;
+        document.getElementById('status').textContent = `saved! summary: "${uiSummary}"`;
         
         // setTimeout(() => {
         //      window.close();
@@ -212,30 +292,84 @@ async function handleSave() {
     }
 }
 
-//북마크 ID를 키로 하여 요약 내용을 로컬 스토리지에 저장
-// async function saveSummaryToLocal(bookmarkId, summaryText) {
-//     console.log(`[STORAGE DEBUG] 저장 시도: 북마크 ID ${bookmarkId}, 요약: ${summaryText.substring(0, 15)}...`);
-
-//     // 1. 기존 데이터 로드 (STORAGE_KEY로 로드)
-//     const allSummaries = await chrome.storage.local.get(STORAGE_KEY);
+/**
+ * TF-IDF 모델 재구축 (새 북마크 추가 시)
+ */
+async function rebuildTfIdfModel() {
+    console.log('[TF-IDF REBUILD] 모델 재구축 및 벡터 갱신 시작...');
     
-//     // 2. allSummaries 객체의 내용 확인
-//     console.log(`[STORAGE DEBUG] 1. 로드된 raw 데이터:`, allSummaries);
-
-//     // 3. STORAGE_KEY로 실제 맵을 추출하거나, 없으면 빈 객체로 초기화
-//     // chrome.storage.local.get(키)는 {키: 값} 형태의 객체를 반환합니다.
-//     const summariesMap = allSummaries[STORAGE_KEY] || {};
+    // popup.js는 브라우저 환경이므로 window.CONFIG 사용
+    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
     
-//     // 4. 추출된 맵의 내용 확인
-//     console.log(`[STORAGE DEBUG] 2. 추출된 summariesMap의 북마크 수:`, Object.keys(summariesMap).length);
-    
-//     summariesMap[bookmarkId] = summaryText; // 새 요약 추가
-    
-//     // 5. 저장
-//     await chrome.storage.local.set({ [STORAGE_KEY]: summariesMap });
-    
-//     console.log(`[STORAGE DEBUG] 3. 저장 완료. 총 북마크 수:`, Object.keys(summariesMap).length);
-// }
+    try {
+        const allSummaries = await chrome.storage.local.get(storageKey);
+        const summariesMap = allSummaries[storageKey] || {};
+        
+        const documents = [];
+        const bookmarkIds = Object.keys(summariesMap);
+        
+        // 1. 모든 북마크의 텍스트 수집
+        for (const bookmarkId of bookmarkIds) {
+            const summaryData = summariesMap[bookmarkId];
+            if (summaryData) {
+                // 저장 로직과 동일하게 텍스트를 결합
+                const docText = [
+                    summaryData.title || '',
+                    summaryData.englishSummary || '',
+                    summaryData.englishKeySnippet || '',
+                    summaryData.englishFolderName || ''
+                ].filter(text => text.trim() !== '').join(' ');
+                
+                if (docText.trim()) {
+                    documents.push(docText);
+                }
+            }
+        }
+        
+        // window.TFIDF 사용 (popup.js는 브라우저 환경)
+        if (documents.length === 0 || !window.TFIDF) {
+            console.warn('[TF-IDF REBUILD] 문서나 TFIDF 클래스가 없어 재구축 건너뜀.');
+            return;
+        }
+        
+        // 2. 새 TF-IDF 모델 구축 (새로운 Vocabulary 생성)
+        const newTfidfModel = new window.TFIDF();
+        newTfidfModel.buildVocabulary(documents);
+        
+        // 3. 모델 저장 (새 모델 덮어쓰기)
+        const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
+        await chrome.storage.local.set({
+            [TFIDF_MODEL_KEY]: newTfidfModel.serialize()
+        });
+        
+        // 4. 모든 북마크 벡터 갱신 (차원 동기화)
+        let updatedSummariesCount = 0;
+        for (const bookmarkId of bookmarkIds) {
+            const summaryData = summariesMap[bookmarkId];
+            if (summaryData) {
+                const docText = [
+                    summaryData.title || '',
+                    summaryData.englishSummary || '',
+                    summaryData.englishKeySnippet || '',
+                    summaryData.englishFolderName || ''
+                ].filter(text => text.trim() !== '').join(' ');
+                
+                // 새로운 모델을 사용하여 벡터 재계산 및 덮어쓰기
+                summaryData.tfidfVector = newTfidfModel.computeTFIDFVector(docText);
+                updatedSummariesCount++;
+            }
+        }
+        
+        // 5. 갱신된 summariesMap을 로컬 스토리지에 저장
+        await chrome.storage.local.set({
+            [storageKey]: summariesMap
+        });
+        
+        console.log(`[TF-IDF REBUILD] 모델 구축 완료 (Vocab 크기: ${newTfidfModel.vocabulary.size}). ${updatedSummariesCount}개 북마크 벡터 갱신 완료.`);
+    } catch (error) {
+        console.error('[TF-IDF] 모델 재구축 실패:', error);
+    }
+}
 
 /**
  * Chrome 북마크 시스템에 새 북마크를 생성하는 핵심 로직입니다.
@@ -262,9 +396,27 @@ async function summarizePageContent(content) {
     if (!window.CONFIG || !window.CONFIG.GEMINI_API_KEY || window.CONFIG.GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
         throw new Error("Gemini API 키가 설정되지 않았습니다. config.js 파일을 확인해주세요.");
     }
+    if (!window.textEmbedder || typeof window.textEmbedder._translateText !== 'function') {
+        throw new Error("TextEmbedder가 초기화되지 않았거나 번역 기능이 없습니다. 번역 로직을 확인해주세요.");
+    }
     
-    // API 호출을 위한 프롬프트 정의
-    const prompt = `다음 텍스트를 분석하고, 핵심 내용을 100자 이내의 한국어 한 줄로 간결하게 요약해 주세요. 절대 100자를 넘기지 마세요. 텍스트: "${content.substring(0, 10000)}..."`; // 10000자로 제한
+    // 1. 콘텐츠를 영어로 번역 (TextEmbedder의 번역 기능을 활용)
+    const translatedEnglishContent = await window.textEmbedder._translateText(content.substring(0, 10000), 'en');
+
+    // 2. API 호출을 위한 영어 프롬프트 정의
+    const prompt = `
+    Analyze the following web page text and respond in JSON format.
+    Exclude advertisements, copyright notices, navigation links, and generic filler text.
+    
+    All text in the response, including keySnippet and summary fields, **MUST be written in plain English**, without any foreign characters, explanations, or added text.
+    
+    The response MUST follow this exact JSON schema:
+    {
+      "keySnippet": "[A concise, well-formed English sentence summarizing the core content, max 300 characters.]",
+      "summary": "[A brief, single-line English summary representing the entire page content.]"
+    }
+    
+    Text to analyze: "${translatedEnglishContent}"`;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${window.CONFIG.GEMINI_MODEL}:generateContent?key=${window.CONFIG.GEMINI_API_KEY}`;
 
@@ -290,18 +442,31 @@ async function summarizePageContent(content) {
         }
 
         const data = await response.json();
+        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
         
-        // 결과에서 텍스트 추출
-        const summary = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        
-        if (!summary) {
-            return "요약을 생성할 수 없습니다.";
+        if (!rawText) {
+            return { summary: "Could not generate summary.", keySnippet: "No refined content found" };
         }
         
-        return summary;
+        // JSON 응답 파싱 및 안전한 데이터 반환
+        try {
+            const cleanJsonText = rawText.replace(/```json\s*/, '').replace(/\s*```/, '');
+            const jsonResponse = JSON.parse(cleanJsonText);
+            
+            return {
+                summary: jsonResponse.summary?.trim() || "Summary failed",
+                keySnippet: jsonResponse.keySnippet?.trim() || "No refined content found"
+            };
+
+        } catch (e) {
+            console.error("Gemini Response JSON Parsing Failed:", e, "Raw Text:", rawText);
+            // JSON 파싱 실패 시, 원본 텍스트를 요약으로 사용하지 않고, 오류 메시지를 영어로 반환
+            return { summary: "Summary parsing failed", keySnippet: "Error in key snippet extraction" };
+        }
+
     } catch (error) {
-        console.error("Gemini 요약 API 오류:", error);
-        return "요약 서비스 오류 발생";
+        console.error("Gemini Summarization API Error:", error);
+        return { summary: "Summarization service error", keySnippet: "Summarization service error" };
     }
 }
 
@@ -448,4 +613,231 @@ async function saveSummaryAndThumbnail(bookmarkId, summaryText, thumbnailUrl) {
     };
     
     await chrome.storage.local.set({ [storageKey]: summariesMap });
+}
+
+//요약 정보, 썸네일 URL, 임베딩을 로컬 스토리지에 저장
+async function saveSummaryAndThumbnailWithEmbedding(bookmarkId, title, englishSummary, englishKeySnippet, uiSummary, englishFolderName, thumbnailUrl, embedding, tfidfVector) {
+    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+    const allSummaries = await chrome.storage.local.get(storageKey);
+    const summariesMap = allSummaries[storageKey] || {};
+    
+    summariesMap[bookmarkId] = {
+        title: title,
+        englishSummary: englishSummary,
+        englishKeySnippet: englishKeySnippet,
+        uiSummary: uiSummary,
+        englishFolderName: englishFolderName,
+        thumbnail: thumbnailUrl,
+        embedding: embedding || null,
+        tfidfVector: tfidfVector || null
+    };  
+    await chrome.storage.local.set({ [storageKey]: summariesMap });
+    console.log(`[STORAGE DEBUG] bookmark saved: ID ${bookmarkId}, embedding included: ${!!embedding}, tfidf included: ${!!tfidfVector}`);
+}
+
+/**
+ * 검색 버튼 클릭 핸들러
+ */
+async function handleSearch() {
+    const searchQuery = document.getElementById('searchInput').value.trim();
+    const statusElement = document.getElementById('search-status');
+    const resultsElement = document.getElementById('results-output');
+    
+    if (!searchQuery) {
+        statusElement.textContent = '검색어를 입력해주세요.';
+        return;
+    }
+    
+    statusElement.textContent = '검색 중...';
+    resultsElement.innerHTML = '';
+    
+    try {
+        // 1. textEmbedder 초기화 확인
+        if (!window.textEmbedder) {
+            throw new Error('textEmbedder를 사용할 수 없습니다.');
+        }
+        
+        if (!window.textEmbedder.isModelLoaded()) {
+            statusElement.textContent = '임베딩 모델 로딩 중...';
+            await window.textEmbedder.initialize({
+                onProgress: (progress) => {
+                    statusElement.textContent = `임베딩 모델 로딩: ${(progress.progress * 100).toFixed(0)}%`;
+                }
+            });
+        }
+        
+        // 2. 검색어 임베딩 생성
+        statusElement.textContent = '검색어 분석 중...';
+        const queryEmbedding = await window.textEmbedder.embedText(searchQuery);
+        console.log('[SEARCH DEBUG] 검색어 임베딩 생성 완료');
+        
+        // 3. 저장된 북마크들과 임베딩 가져오기
+        statusElement.textContent = '북마크 검색 중...';
+        const searchResults = await searchBookmarksByEmbedding(queryEmbedding, searchQuery);
+        
+        // 4. 결과 표시
+        displaySearchResults(searchResults, resultsElement, statusElement);
+        
+    } catch (error) {
+        console.error('[SEARCH ERROR]', error);
+        statusElement.textContent = `검색 실패: ${error.message}`;
+    }
+}
+
+/**
+ * 임베딩을 사용하여 북마크 검색
+ */
+async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
+    // 1. 모든 북마크 가져오기
+    const allBookmarks = await chrome.bookmarks.getTree();
+    const bookmarkList = [];
+    
+    // 북마크 트리를 평면화
+    function flattenBookmarks(nodes) {
+        for (const node of nodes) {
+            if (node.url) { // 실제 북마크인 경우
+                bookmarkList.push(node);
+            }
+            if (node.children) {
+                flattenBookmarks(node.children);
+            }
+        }
+    }
+    
+    flattenBookmarks(allBookmarks);
+    console.log(`[SEARCH DEBUG] 총 ${bookmarkList.length}개 북마크 발견`);
+    
+    // 2. 저장된 임베딩 정보 가져오기
+    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+    const allSummaries = await chrome.storage.local.get(storageKey);
+    console.log(`[SEARCH DEBUG] allSummaries: ${JSON.stringify(allSummaries, null, 2)}`);
+    const summariesMap = allSummaries[storageKey] || {};
+    console.log(`[SEARCH DEBUG] summariesMap: ${JSON.stringify(summariesMap, null, 2)}`);
+
+    // 3. TF-IDF 모델 로드
+    const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
+    const savedModel = await chrome.storage.local.get(TFIDF_MODEL_KEY);
+    let tfidfModel = null;
+    let queryTfIdfVector = null;
+    
+    if (savedModel[TFIDF_MODEL_KEY] && window.TFIDF) {
+        tfidfModel = new window.TFIDF();
+        tfidfModel.deserialize(savedModel[TFIDF_MODEL_KEY]);
+        console.log(`[SEARCH DEBUG] 복원된 모델 Vocab 크기: ${tfidfModel.vocabulary.size}, TotalDocs: ${tfidfModel.totalDocuments}`);
+        
+        // 검색어의 TF-IDF 벡터 계산
+        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQuery);
+        console.log(`[SEARCH DEBUG] 검색어 TF-IDF 벡터 생성 완료. 길이: ${queryTfIdfVector.length}`);
+    }
+    
+    // 4. 하이브리드 스코어링
+    const results = [];
+    const ALPHA = 0.7; // 임베딩 가중치
+    const BETA = 0.3;  // TF-IDF 가중치
+    
+    for (const bookmark of bookmarkList) {
+        const summaryData = summariesMap[bookmark.id];
+        console.log(`[SEARCH DEBUG] 북마크 ID ${bookmark.id}: summaryData 존재=${!!summaryData}, embedding 존재=${!!(summaryData?.embedding)}, tfidfVector 존재=${!!(summaryData?.tfidfVector)}`);
+        
+        if (summaryData && summaryData.embedding) {
+            // Semantic 점수 (임베딩 기반 코사인 유사도)
+            const semanticScore = window.textEmbedder.cosineSimilarity(
+                queryEmbedding, 
+                summaryData.embedding
+            );
+            
+            // Keyword 점수 (TF-IDF 기반 코사인 유사도)
+            let keywordScore = 0;
+            if (tfidfModel && queryTfIdfVector && summaryData.tfidfVector) {
+                // 벡터 차원 확인
+                if (queryTfIdfVector.length !== summaryData.tfidfVector.length) {
+                    console.warn(`[SEARCH DEBUG] "${bookmark.title}" - 벡터 차원 불일치: query=${queryTfIdfVector.length}, bookmark=${summaryData.tfidfVector.length}`);
+                } else {
+                    keywordScore = tfidfModel.cosineSimilarity(
+                        queryTfIdfVector,
+                        summaryData.tfidfVector
+                    );
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 계산: query 벡터 길이=${queryTfIdfVector.length}, bookmark 벡터 길이=${summaryData.tfidfVector.length}, keywordScore=${keywordScore.toFixed(4)}`);
+                }
+            } else {
+                // 왜 Keyword 점수가 0인지 명확히 로그
+                if (!tfidfModel) {
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 모델 없음`);
+                } else if (!queryTfIdfVector) {
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 검색어 TF-IDF 벡터 없음`);
+                } else if (!summaryData.tfidfVector) {
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 북마크 TF-IDF 벡터 없음 (구버전 북마크일 수 있음)`);
+                }
+            }
+            
+            // 최종 점수: α * Semantic + β * Keyword
+            const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
+            
+            // 디버그 정보 출력
+            console.log(`[SEARCH DEBUG] "${bookmark.title}" - Semantic: ${(semanticScore * 100).toFixed(1)}%, Keyword: ${(keywordScore * 100).toFixed(1)}%, Final: ${(finalScore * 100).toFixed(1)}%`);
+            
+            results.push({
+                bookmark: bookmark,
+                summary: summaryData.uiSummary || 'No summary information',
+                thumbnail: summaryData.thumbnail || '',
+                similarity: finalScore,
+                semanticScore: semanticScore,
+                keywordScore: keywordScore,
+                score: Math.round(finalScore * 100)
+            });
+        }
+    }
+    
+    // 4. 유사도 순으로 정렬하고 상위 10개만 반환
+    return results
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, 10)
+        .filter(result => result.similarity > 0.2); // 최소 유사도 20%로 상향 조정
+}
+
+/**
+ * 검색 결과를 UI에 표시
+ */
+function displaySearchResults(results, resultsElement, statusElement) {
+    if (results.length === 0) {
+        statusElement.textContent = '검색 결과가 없습니다.';
+        resultsElement.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">검색 결과가 없습니다.<br>임베딩이 생성된 북마크가 있는지 확인해주세요.</div>';
+        return;
+    }
+    
+    statusElement.textContent = `${results.length}개의 결과를 찾았습니다.`;
+    
+    resultsElement.innerHTML = results.map(result => `
+        <div class="result-card">
+            <div class="result-thumbnail"><img src="${result.thumbnail}" alt="thumbnail"></div>
+            <div class="result-title" onclick="openBookmark('${result.bookmark.url}')">${result.bookmark.title}</div>
+            <div class="result-url">${result.bookmark.url}</div>
+            <div class="result-score">${result.score}% 일치</div>
+            <div style="font-size: 0.9em; color: #666; margin-top: 5px;">${result.summary}</div>
+        </div>
+    `).join('');
+}
+
+/**
+ * 북마크 열기
+ */
+function openBookmark(url) {
+    chrome.tabs.create({ url: url });
+    window.close();
+}
+
+/**
+ * 폴더 ID로 폴더 이름 가져오기
+ */
+async function getFolderNameById(folderId) {
+    try {
+        const bookmarks = await chrome.bookmarks.get(folderId);
+        if (bookmarks && bookmarks.length > 0) {
+            return bookmarks[0].title || '기타 북마크';
+        }
+        return '기타 북마크';
+    } catch (error) {
+        console.error('[FOLDER DEBUG] 폴더 이름 가져오기 실패:', error);
+        return '기타 북마크';
+    }
 }

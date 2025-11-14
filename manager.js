@@ -1,4 +1,40 @@
-// manager.js
+const VISIT_DATA_KEY = 'SmartMarkVisitData';
+
+// 유틸리티 점수 가중치 (Recency가 가장 중요)
+const WEIGHTS = {
+    RECENCY: 0.5,     // 마지막 접속 시간 (가장 높음)
+    FREQUENCY: 0.3,   // 총 방문 횟수
+    ENGAGEMENT: 0.2,  // 총 체류 시간
+};
+// 현재 시간의 타임스탬프 (밀리초)
+const NOW_MS = Date.now();
+
+/**
+ * Recency 점수 계산 (경과 시간에 반비례, 로그 스케일 적용)
+ * @param {number} lastVisitedMs 마지막 방문 타임스탬프 (밀리초)
+ * @returns {number} 0.0 ~ 1.0 사이의 점수
+ */
+function calculateRecencyScore(lastVisitedMs) {
+    if (lastVisitedMs === 0) return 0;
+    
+    // 경과 시간 (시간 단위)
+    const timeElapsedHours = (NOW_MS - lastVisitedMs) / (1000 * 60 * 60);
+    
+    // 로그 스케일을 사용하여 시간이 지날수록 점수가 급격히 감소하도록 설계
+    // 1시간 내 방문: 1.0, 10시간: ~0.5, 100시간: ~0.3
+    return 1 / (1 + Math.log10(timeElapsedHours + 1));
+}
+
+/**
+ * Frequency와 Engagement 점수를 정규화합니다.
+ * @param {number} value 현재 북마크의 값
+ * @param {number} maxValue 폴더 내 북마크들의 최댓값
+ * @returns {number} 0.0 ~ 1.0 사이의 점수
+ */
+function normalizeScore(value, maxValue) {
+    if (maxValue === 0) return 0;
+    return value / maxValue;
+}
 
 document.addEventListener('DOMContentLoaded', initializeManager);
 
@@ -136,6 +172,9 @@ async function loadFolderInformation() {
  * 유효한 북마크들을 폴더 정보와 함께 로드합니다.
  */
 async function loadValidBookmarksWithFolders() {
+    const allVisitData = await chrome.storage.local.get(VISIT_DATA_KEY);
+    const visitDataMap = allVisitData[VISIT_DATA_KEY] || {};
+
     const summaryIds = Object.keys(bookmarkSummaries);
     validBookmarksWithFolders = [];
     
@@ -145,18 +184,24 @@ async function loadValidBookmarksWithFolders() {
             if (bookmarkArray && bookmarkArray.length > 0) {
                 const bookmark = bookmarkArray[0];
                 const folderInfo = folderMap[bookmark.parentId] || { title: '알 수 없는 폴더', id: bookmark.parentId };
-                
-                // 💡 수정된 부분: bookmarkSummaries[bookmark.id]가 이제 객체입니다.
-                const summaryObject = bookmarkSummaries[bookmark.id] || { summary: "요약 정보 없음", thumbnail: "" }; 
+
+                const summaryObject = bookmarkSummaries[bookmark.id] || { uiSummary: "No summary information", thumbnail: "" }; 
+
+                const visitData = visitDataMap[bookmark.id] || {
+                    frequency: 0,
+                    totalTimeSpentMs: 0,
+                    lastVisited: 0
+                };
 
                 validBookmarksWithFolders.push({
                     ...bookmark,
                     folderInfo: folderInfo,
-                    summary: summaryObject.summary,      // 💡 요약 텍스트 분리
-                    thumbnail: summaryObject.thumbnail   // 💡 썸네일 URL 분리
+                    uiSummary: summaryObject.uiSummary,      // 💡 요약 텍스트 분리
+                    thumbnail: summaryObject.thumbnail,  // 💡 썸네일 URL 분리
+                    visitData: visitData 
                 });
                 
-                console.log(`[FOLDER DEBUG] 북마크 로드: "${bookmark.title}" in "${folderInfo.title}"`);
+                console.log(`[FOLDER DEBUG] 북마크 로드: "${bookmark.title}" in "${folderInfo.title}" uiSummary: "${summaryObject.uiSummary}"`);
             }
         } catch (error) {
             console.warn(`[FOLDER DEBUG] 북마크 ID ${bookmarkId} 로드 실패:`, error.message);
@@ -201,6 +246,49 @@ async function renderBookmarksWithSummaries() {
 }
 
 /**
+ * 북마크 리스트를 유틸리티 점수 순으로 정렬합니다.
+ * @param {Array<Object>} bookmarks 정렬할 북마크 객체 배열
+ * @returns {Array<Object>} 정렬된 북마크 객체 배열
+ */
+function sortBookmarksByUtilityScore(bookmarks) {
+    if (bookmarks.length === 0) return [];
+    
+    // 1. 폴더 내 최댓값 찾기 (정규화를 위함)
+    const maxFrequency = Math.max(...bookmarks.map(b => b.visitData.frequency));
+    const maxTimeSpent = Math.max(...bookmarks.map(b => b.visitData.totalTimeSpentMs));
+    
+    // 2. 각 북마크의 최종 유틸리티 점수 계산
+    const scoredBookmarks = bookmarks.map(bookmark => {
+        const data = bookmark.visitData;
+        
+        // Recency 점수 (시간 경과에 따라 계산)
+        const recencyScore = calculateRecencyScore(data.lastVisited);
+        
+        // Frequency 점수 (폴더 내 최댓값 대비 정규화)
+        const frequencyScore = normalizeScore(data.frequency, maxFrequency);
+        
+        // Engagement 점수 (폴더 내 최댓값 대비 정규화)
+        const engagementScore = normalizeScore(data.totalTimeSpentMs, maxTimeSpent);
+        
+        // 최종 가중치 합산 점수
+        const finalScore = 
+            (WEIGHTS.RECENCY * recencyScore) +
+            (WEIGHTS.FREQUENCY * frequencyScore) +
+            (WEIGHTS.ENGAGEMENT * engagementScore);
+            
+        // 디버깅 및 정렬을 위해 점수 추가
+        bookmark.utilityScore = finalScore;
+        
+        console.log(`[SORT DEBUG] ${bookmark.title}: R(${recencyScore.toFixed(2)}) x ${WEIGHTS.RECENCY} + F(${frequencyScore.toFixed(2)}) x ${WEIGHTS.FREQUENCY} + E(${engagementScore.toFixed(2)}) x ${WEIGHTS.ENGAGEMENT} = Score ${finalScore.toFixed(4)}`);
+        
+        return bookmark;
+    });
+    
+    // 3. 점수 순으로 내림차순 정렬
+    return scoredBookmarks.sort((a, b) => b.utilityScore - a.utilityScore);
+}
+
+/**
  * 스마트 북마크 섹션을 렌더링합니다.
  * @param {Array} bookmarks 렌더링할 북마크 배열
  */
@@ -224,14 +312,20 @@ function renderSmartBookmarksSection(bookmarks) {
     container.classList.add('bookmark-container');
 
     bookmarks.forEach(bookmark => {
-        const summaryObject = bookmarkSummaries[bookmark.id] || { summary: "Gemini 요약 정보 없음", thumbnail: "" };
-        const summaryText = summaryObject.summary;
+        const summaryObject = bookmarkSummaries[bookmark.id] || { uiSummary: "No summary information", thumbnail: "" };
+        const summaryText = summaryObject.uiSummary;
+        console.log(`[SMART DEBUG] summaryText: "${summaryText}"`);
         const thumbnailUrl = summaryObject.thumbnail;
         
         console.log(`[SMART DEBUG] 북마크 카드 생성: ID=${bookmark.id}, 제목="${bookmark.title}"`);
         
         const card = document.createElement('div');
         card.classList.add('bookmark-card');
+
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => {
+            chrome.tabs.create({ url: bookmark.url });
+        });
         
         // const img = document.createElement('img');
         // img.classList.add('card-image');
@@ -266,10 +360,8 @@ function renderSmartBookmarksSection(bookmarks) {
         };
         card.appendChild(img);
         
-        // 2. 제목 (클릭하면 북마크로 이동)
-        const titleLink = document.createElement('a');
-        titleLink.href = bookmark.url;
-        titleLink.target = '_blank';
+        // 2. 제목
+        const titleLink = document.createElement('div');
         titleLink.classList.add('card-title');
         titleLink.textContent = bookmark.title;
         card.appendChild(titleLink);
@@ -360,10 +452,16 @@ function renderFilteredBookmarks(selectedFolderId) {
     
     // 렌더링
     OUTPUT_ELEMENT.innerHTML = '';
-    
+
+    // 정렬 로직 적용
     Object.values(bookmarksByFolder).forEach(folderGroup => {
-        renderFolderGroup(folderGroup.folderInfo, folderGroup.bookmarks);
+        const sortedBookmarks = sortBookmarksByUtilityScore(folderGroup.bookmarks);
+        renderFolderGroup(folderGroup.folderInfo, sortedBookmarks); 
     });
+    
+    // Object.values(bookmarksByFolder).forEach(folderGroup => {
+    //     renderFolderGroup(folderGroup.folderInfo, folderGroup.bookmarks);
+    // });
 }
 
 /**
@@ -386,6 +484,10 @@ function renderFolderGroup(folderInfo, bookmarks) {
     bookmarks.forEach(bookmark => {
         const card = document.createElement('div');
         card.classList.add('bookmark-card');
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => {
+            chrome.tabs.create({ url: bookmark.url });
+        });
 
         // 1. 이미지 (썸네일 URL 사용)
         const img = document.createElement('img');
@@ -421,9 +523,7 @@ function renderFolderGroup(folderInfo, bookmarks) {
         // card.appendChild(img);
         
         // 2. 제목 (클릭하면 북마크로 이동)
-        const titleLink = document.createElement('a');
-        titleLink.href = bookmark.url;
-        titleLink.target = '_blank';
+        const titleLink = document.createElement('div');
         titleLink.classList.add('card-title');
         titleLink.textContent = bookmark.title;
         card.appendChild(titleLink);
@@ -438,7 +538,7 @@ function renderFolderGroup(folderInfo, bookmarks) {
         const summaryElement = document.createElement('div');
         summaryElement.classList.add('card-summary');
         // bookmark.summary는 이미 loadValidBookmarksWithFolders에서 분리하여 텍스트만 저장했습니다.
-        summaryElement.textContent = bookmark.summary; 
+        summaryElement.textContent = bookmark.uiSummary; 
         card.appendChild(summaryElement);
 
         container.appendChild(card);
@@ -462,6 +562,21 @@ function setupEventListeners() {
     refreshButton.addEventListener('click', () => {
         location.reload();
     });
+
+    const searchButton = document.getElementById('searchButton');
+    const searchInput = document.getElementById('searchInput');
+    
+    if (searchButton) {
+        searchButton.addEventListener('click', handleSearchInManager);
+    }
+    
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleSearchInManager();
+            }
+        });
+    }
 }
 
 
@@ -571,4 +686,191 @@ function renderFolderSection(folderNode) {
     OUTPUT_ELEMENT.appendChild(folderSection);
     
     console.log(`[FOLDER DEBUG] 폴더 "${folderNode.title}" 렌더링 완료 - DOM에 추가됨`);
+}
+
+async function handleSearchInManager() {
+    const searchQuery = document.getElementById('searchInput').value.trim();
+    const statusElement = document.getElementById('search-status');
+    const resultsElement = document.getElementById('results-output');
+    const bookmarkOutput = document.getElementById('bookmark-output');
+    
+    if (!searchQuery) {
+        statusElement.textContent = 'please enter the content to search...';
+        return;
+    }
+    
+    // 검색 모드일 때는 기존 북마크 출력을 숨김
+    bookmarkOutput.style.display = 'none';
+    
+    statusElement.textContent = 'searching...';
+    resultsElement.innerHTML = '';
+    
+    try {
+        // popup.js의 handleSearch 함수 재사용
+        // 하지만 결과 표시는 manager에 맞게 커스터마이즈
+        if (!window.textEmbedder) {
+            throw new Error('textEmbedder를 사용할 수 없습니다.');
+        }
+        
+        if (!window.textEmbedder.isModelLoaded()) {
+            statusElement.textContent = 'loading embedding model...';
+            await window.textEmbedder.initialize({
+                onProgress: (progress) => {
+                    statusElement.textContent = `loading embedding model: ${(progress.progress * 100).toFixed(0)}%`;
+                }
+            });
+        }
+
+        statusElement.textContent = 'analyzing search query...';
+        const queryEmbedding = await window.textEmbedder.embedText(searchQuery);
+        
+        statusElement.textContent = 'searching bookmarks...';
+        const searchResults = await searchBookmarksByEmbedding(queryEmbedding, searchQuery);
+        
+        // Manager 페이지에 맞게 결과 표시
+        displaySearchResultsInManager(searchResults, resultsElement, statusElement);
+        
+    } catch (error) {
+        console.error('[SEARCH ERROR]', error);
+        statusElement.textContent = `search failed: ${error.message}`;
+        bookmarkOutput.style.display = 'block'; // 오류 시 다시 표시
+    }
+}
+
+/**
+ * Manager 페이지용 검색 결과 표시
+ */
+function displaySearchResultsInManager(results, resultsElement, statusElement) {
+    if (results.length === 0) {
+        statusElement.textContent = '검색 결과가 없습니다.';
+        resultsElement.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">검색 결과가 없습니다.<br>임베딩이 생성된 북마크가 있는지 확인해주세요.</div>';
+        return;
+    }
+    
+    statusElement.textContent = `${results.length}개의 결과를 찾았습니다.`;
+    
+    resultsElement.innerHTML = results.map(result => `
+        <div class="result-card" onclick="window.open('${result.bookmark.url}', '_blank')">
+            <div class="result-thumbnail">
+                <img src="${result.thumbnail}" alt="thumbnail" onerror="this.src='https://www.google.com/s2/favicons?domain=${new URL(result.bookmark.url).hostname}&sz=128'; this.style.width='50px'; this.style.height='50px';">
+            </div>
+            <div class="result-title">${result.bookmark.title}</div>
+            <div class="result-url">${result.bookmark.url}</div>
+            <div class="result-summary">${result.summary}</div>
+            <div class="result-score">${result.score}% 일치</div>
+        </div>
+    `).join('');
+}
+
+async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
+    // 1. 모든 북마크 가져오기
+    const allBookmarks = await chrome.bookmarks.getTree();
+    const bookmarkList = [];
+    
+    // 북마크 트리를 평면화
+    function flattenBookmarks(nodes) {
+        for (const node of nodes) {
+            if (node.url) {
+                bookmarkList.push(node);
+            }
+            if (node.children) {
+                flattenBookmarks(node.children);
+            }
+        }
+    }
+    
+    flattenBookmarks(allBookmarks);
+    
+    // 2. 저장된 임베딩 정보 가져오기
+    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+    const allSummaries = await chrome.storage.local.get(storageKey);
+    const summariesMap = allSummaries[storageKey] || {};
+
+    // 3. TF-IDF 모델 로드
+    const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
+    const savedModel = await chrome.storage.local.get(TFIDF_MODEL_KEY);
+    let tfidfModel = null;
+    let queryTfIdfVector = null;
+    
+    if (savedModel[TFIDF_MODEL_KEY] && window.TFIDF) {
+        tfidfModel = new window.TFIDF();
+        tfidfModel.deserialize(savedModel[TFIDF_MODEL_KEY]);
+        console.log(`[SEARCH DEBUG] 복원된 모델 Vocab 크기: ${tfidfModel.vocabulary.size}, TotalDocs: ${tfidfModel.totalDocuments}`);
+        
+        // 검색어의 TF-IDF 벡터 계산
+        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQuery);
+        console.log(`[SEARCH DEBUG] 검색어 TF-IDF 벡터 생성 완료. 길이: ${queryTfIdfVector.length}`);
+    }
+    
+    // 4. 하이브리드 스코어링
+    const results = [];
+    const ALPHA = 0.7; // 임베딩 가중치
+    const BETA = 0.3;  // TF-IDF 가중치
+    
+    for (const bookmark of bookmarkList) {
+        const summaryData = summariesMap[bookmark.id];
+        console.log(`[SEARCH DEBUG] 북마크 ID ${bookmark.id}: summaryData 존재=${!!summaryData}, embedding 존재=${!!(summaryData?.embedding)}, tfidfVector 존재=${!!(summaryData?.tfidfVector)}`);
+        
+        if (summaryData && summaryData.embedding) {
+            // Semantic 점수 (임베딩 기반 코사인 유사도)
+            const semanticScore = window.textEmbedder.cosineSimilarity(
+                queryEmbedding, 
+                summaryData.embedding
+            );
+            
+            // Keyword 점수 (TF-IDF 기반 코사인 유사도)
+            let keywordScore = 0;
+            if (tfidfModel && queryTfIdfVector && summaryData.tfidfVector) {
+                // 벡터 차원 확인 및 조정
+                if (queryTfIdfVector.length !== summaryData.tfidfVector.length) {
+                    console.warn(`[SEARCH DEBUG] "${bookmark.title}" - 벡터 차원 불일치: query=${queryTfIdfVector.length}, bookmark=${summaryData.tfidfVector.length}`);
+                    
+                    // 공통 차원까지만 사용하여 계산
+                    const minLength = Math.min(queryTfIdfVector.length, summaryData.tfidfVector.length);
+                    const queryVec = queryTfIdfVector.slice(0, minLength);
+                    const bookmarkVec = summaryData.tfidfVector.slice(0, minLength);
+                    
+                    keywordScore = tfidfModel.cosineSimilarity(queryVec, bookmarkVec);
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 차원 조정 후 TF-IDF 계산: ${minLength}차원 사용, keywordScore=${keywordScore.toFixed(4)}`);
+                } else {
+                    keywordScore = tfidfModel.cosineSimilarity(
+                        queryTfIdfVector,
+                        summaryData.tfidfVector
+                    );
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 계산: keywordScore=${keywordScore.toFixed(4)}`);
+                }
+            } else {
+                // 왜 Keyword 점수가 0인지 명확히 로그
+                if (!tfidfModel) {
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 모델 없음`);
+                } else if (!queryTfIdfVector) {
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 검색어 TF-IDF 벡터 없음`);
+                } else if (!summaryData.tfidfVector) {
+                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 북마크 TF-IDF 벡터 없음 (구버전 북마크일 수 있음)`);
+                }
+            }
+            
+            // 최종 점수: α * Semantic + β * Keyword
+            const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
+            
+            // 디버그 정보 출력
+            console.log(`[SEARCH DEBUG] "${bookmark.title}" - Semantic: ${(semanticScore * 100).toFixed(1)}%, Keyword: ${(keywordScore * 100).toFixed(1)}%, Final: ${(finalScore * 100).toFixed(1)}%`);
+            
+            results.push({
+                bookmark: bookmark,
+                summary: summaryData.uiSummary || 'No summary information',
+                thumbnail: summaryData.thumbnail || '',
+                similarity: finalScore,
+                semanticScore: semanticScore,
+                keywordScore: keywordScore,
+                score: Math.round(finalScore * 100)
+            });
+        }
+    }
+    
+    // 5. 유사도 순으로 정렬하고 상위 10개만 반환
+    return results
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, 10)
+        .filter(result => result.similarity > 0.2); // 최소 유사도 20%로 설정 (popup.js와 동일)
 }

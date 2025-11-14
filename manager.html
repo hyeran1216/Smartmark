@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>CodeMark 북마크 관리</title>
+    <title>SmartMark Manager</title>
     <style>
         body { 
             font-family: Arial, sans-serif; 
@@ -32,7 +32,7 @@
         }
         .bookmark-container {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
             gap: 20px;
         }
         .bookmark-card {
@@ -41,6 +41,7 @@
             padding: 15px;
             transition: transform 0.2s, box-shadow 0.2s;
             background-color: #f9f9f9;
+            cursor: pointer;
         }
         .bookmark-card:hover {
             transform: translateY(-3px);
@@ -80,24 +81,155 @@
             line-height: 1.4;
             border-left: 3px solid #007bff;
         }
+
+        /* 검색 기능 스타일 추가 */
+        .search-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        #search-container {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        #searchInput {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        #searchButton {
+            margin-left: 10px;
+            padding: 10px 20px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #searchButton:hover {
+            background-color: #357ae8;
+        }
+        #search-status {
+            margin-bottom: 10px;
+            font-size: 0.9em;
+            color: #666;
+        }
+        #results-output {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 20px;
+            max-height: 600px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        .result-card {
+            border: 1px solid #eee;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+        }
+        .result-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .result-thumbnail {
+            width: 100%;
+            height: 150px;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            background-color: #eee;
+        }
+        .result-thumbnail img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .result-title {
+            font-weight: bold;
+            font-size: 1.1em;
+            color: #333;
+            margin-bottom: 5px;
+            text-decoration: none;
+            display: block;
+        }
+        .result-url {
+            font-size: 0.8em;
+            color: #666;
+            margin-bottom: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .result-score {
+            float: right;
+            font-size: 0.8em;
+            color: #f4b400;
+            font-weight: bold;
+        }
+        .result-summary {
+            background-color: #e6f0ff;
+            color: #0056b3;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            line-height: 1.4;
+            border-left: 3px solid #007bff;
+        }
     </style>
 </head>
 <body>
     <h1>SmartMark</h1>
+
+    <!-- 언어 설정 섹션 추가 -->
+    <!-- <div style="margin-bottom: 20px; padding: 15px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+        <label for="languageSelect" style="font-weight: bold; margin-right: 10px;">🌐 display language:</label>
+        <select id="languageSelect" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 150px;">
+            <option value="ko">한국어 (Korean)</option>
+            <option value="en">English</option>
+            <option value="zh">中文 (Chinese)</option>
+        </select>
+    </div> -->
+
+    <!-- 검색 섹션 추가 -->
+    <div class="search-section">
+        <label for="searchInput" style="font-weight: bold; margin-bottom: 10px; display: block;">🔍 search bookmarks:</label>
+        <div id="search-container">
+            <input type="text" id="searchInput" placeholder="enter the content to search..." />
+            <button id="searchButton">search</button>
+        </div>
+        <div id="search-status" style="margin-bottom: 10px; font-size: 0.9em;"></div>
+        <div id="results-output"></div>
+    </div>
     
     <!-- 폴더 필터 컨트롤 -->
     <div style="margin-bottom: 20px; padding: 15px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
-        <label for="folderFilter" style="font-weight: bold; margin-right: 10px;">📁 폴더별 보기:</label>
+        <label for="folderFilter" style="font-weight: bold; margin-right: 10px;">📁 view by folder:</label>
         <select id="folderFilter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 200px;">
-            <option value="all">모든 스마트 북마크</option>
+            <option value="all">all smart bookmarks</option>
         </select>
-        <button id="refreshButton" style="margin-left: 10px; padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">🔄 새로고침</button>
+        <button id="refreshButton" style="margin-left: 10px; padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">🔄 refresh</button>
     </div>
     
     <div id="bookmark-output">
         </div>
-    
+
+    <script src="./tf.es2017.min.js"></script>
+    <script src="./universal-sentence-encoder.min.js"></script>
+    <script src="utils/tfidf.js"></script>
     <script src="config.js"></script>
+    <script src="textEmbedder.js"></script>
     <script src="popup.js"></script>
     <script src="manager.js"></script>
 </body>

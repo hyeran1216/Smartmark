@@ -59,6 +59,8 @@
         #searchButton { margin-left: 8px; padding: 8px; background-color: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 0 !important; white-space: nowrap;}
         #results-output { max-height: 250px; overflow-y: auto; margin-top: 10px; }
         .result-card { border: 1px solid #eee; padding: 10px; margin-bottom: 8px; border-radius: 4px; }
+        .result-thumbnail { width: 80%; height: 80%; overflow: hidden; display: flex; justify-content: center; align-items: center; flex-shrink: 0;}
+        .result-thumbnail img { max-width: 100%; max-height: 100%; object-fit: contain; }
         .result-title { font-weight: bold; font-size: 1.1em; color: #1a0dab; cursor: pointer; }
         .result-url { font-size: 0.8em; color: #006621; }
         .result-score { float: right; font-size: 0.8em; color: #f4b400; }
@@ -71,37 +73,41 @@
 </head>
 <body>
     <div id="mode-switcher">
-        <button id="saveModeButton" class="active-mode">북마크 저장</button>
-        <button id="searchModeButton">검색</button>
+        <button id="saveModeButton" class="active-mode">save bookmark</button>
+        <button id="searchModeButton">search</button>
     </div>
     <div id="save-bookmark-mode">
         <img id="favIcon" alt="Favicon" style="display: none;">
-        <label for="titleInput">제목</label>
+        <label for="titleInput">title</label>
         <input type="text" id="titleInput">
 
         <label for="urlInput">URL</label>
         <input type="text" id="urlInput" readonly>
 
-        <label for="folderSelect">폴더</label>
+        <label for="folderSelect">folder</label>
         <select id="folderSelect">
-            <option value="">폴더 로딩...</option>
+            <option value="">folder loading...</option>
         </select>
 
-        <div id="status" style="color: green; margin: 15px 0;">북마크 저장...</div>
+        <div id="status" style="color: green; margin: 15px 0;">save bookmark...</div>
 
-        <button id="saveButton">북마크 저장</button>
-        <button id="manageButton">북마크 관리 페이지 열기</button>
+        <button id="saveButton">save</button>
+        <button id="manageButton">manage</button>
     </div>
     <div id="search-mode" style="display:none;">
         <div id="search-container">
-            <input type="text" id="searchInput" placeholder="검색할 내용을 입력하세요..." />
-            <button id="searchButton">검색</button>
+            <input type="text" id="searchInput" placeholder="enter the content to search..." />
+            <button id="searchButton">search</button>
         </div>
         <div id="search-status" style="margin-bottom: 10px; font-size: 0.9em;"></div>
         <div id="results-output"></div>
     </div>
     
+    <script src="./tf.es2017.min.js"></script>
+    <script src="./universal-sentence-encoder.min.js"></script>
+    <script src="utils/tfidf.js"></script>
     <script src="config.js"></script>
+    <script src="textEmbedder.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
