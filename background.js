@@ -1,8 +1,9 @@
 // SmartMark Background Script
-// Chrome Extension API 사용
+// Multi-model Search System
 
-importScripts('utils/tfidf.js');
 importScripts('config.js');
+importScripts('utils/tfidf.js');
+importScripts('search-methods.js');
 
 const VISIT_DATA_KEY = 'SmartMarkVisitData';
 const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
@@ -449,24 +450,20 @@ function extractSearchQuery(url) {
 }
 
 /**
- * Offscreen document를 통해 임베딩 생성
+ * USE 임베딩 생성 (512차원)
  * @param {string} text - 임베딩을 생성할 텍스트
  * @returns {Promise<number[]|null>} 임베딩 벡터 또는 null
  */
 async function generateEmbedding(text) {
-  // Embedder가 준비되지 않았으면 잠시 대기 (최대 5초)
   if (!offscreenDocumentReady) {
-    console.log('[EMBEDDING] Embedder 준비 대기 중...');
+    console.log('[EMBEDDING-USE] Embedder 준비 대기 중...');
     for (let i = 0; i < 10; i++) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      if (offscreenDocumentReady) {
-        console.log('[EMBEDDING] Embedder 준비 완료. 임베딩 생성 시작.');
-        break;
-      }
+      if (offscreenDocumentReady) break;
     }
     
     if (!offscreenDocumentReady) {
-      console.error('[EMBEDDING] Embedder가 준비되지 않았습니다. (5초 타임아웃)');
+      console.error('[EMBEDDING-USE] Embedder 타임아웃 (5초)');
       return null;
     }
   }
@@ -478,13 +475,104 @@ async function generateEmbedding(text) {
     });
 
     if (response && response.success) {
+      console.log(`[EMBEDDING-USE] ✅ 생성 완료 (${response.dimension}차원, ${response.responseTime}ms)`);
       return response.embedding;
     } else {
-      console.error('[EMBEDDING] 임베딩 생성 실패:', response?.error);
+      console.error('[EMBEDDING-USE] 생성 실패:', response?.error);
       return null;
     }
   } catch (error) {
-    console.error('[EMBEDDING] 임베딩 생성 요청 실패:', error);
+    console.error('[EMBEDDING-USE] 요청 실패:', error);
+    return null;
+  }
+}
+
+/**
+ * BERT 임베딩 생성 (384차원)
+ * @param {string} text - 임베딩을 생성할 텍스트
+ * @returns {Promise<number[]|null>} 임베딩 벡터 또는 null
+ */
+async function generateBERTEmbedding(text) {
+  if (!offscreenDocumentReady) {
+    console.log('[EMBEDDING-BERT] Embedder 준비 대기 중...');
+    for (let i = 0; i < 10; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if (offscreenDocumentReady) break;
+    }
+    
+    if (!offscreenDocumentReady) {
+      console.error('[EMBEDDING-BERT] Embedder 타임아웃 (5초)');
+      return null;
+    }
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'GENERATE_BERT_EMBEDDING',
+      text: text,
+    });
+
+    if (response && response.success) {
+      console.log(`[EMBEDDING-BERT] ✅ 생성 완료 (${response.dimension}차원, ${response.responseTime}ms)`);
+      return response.embedding;
+    } else {
+      console.error('[EMBEDDING-BERT] 생성 실패:', response?.error);
+      return null;
+    }
+  } catch (error) {
+    console.error('[EMBEDDING-BERT] 요청 실패:', error);
+    return null;
+  }
+}
+
+/**
+ * KeyBERT 키워드 추출
+ * @param {string} text - 원본 텍스트
+ * @param {string[]} candidates - 후보 n-gram 목록
+ * @returns {Promise<Array|null>} 키워드 목록 또는 null
+ */
+async function extractKeywords(text, candidates) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'EXTRACT_KEYWORDS',
+      text: text,
+      candidates: candidates
+    });
+
+    if (response && response.success) {
+      console.log(`[KeyBERT] ✅ 키워드 추출 완료 (${response.responseTime}ms):`, response.keywords);
+      return response.keywords;
+    } else {
+      console.error('[KeyBERT] 추출 실패:', response?.error);
+      return null;
+    }
+  } catch (error) {
+    console.error('[KeyBERT] 요청 실패:', error);
+    return null;
+  }
+}
+
+/**
+ * N-gram 추출
+ * @param {string} text - 텍스트
+ * @returns {Promise<Array|null>} n-gram 목록 또는 null
+ */
+async function extractNGrams(text) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'EXTRACT_NGRAMS',
+      text: text
+    });
+
+    if (response && response.success) {
+      console.log(`[N-gram] ✅ ${response.ngrams.length}개 추출 완료`);
+      return response.ngrams;
+    } else {
+      console.error('[N-gram] 추출 실패:', response?.error);
+      return null;
+    }
+  } catch (error) {
+    console.error('[N-gram] 요청 실패:', error);
     return null;
   }
 }
@@ -857,10 +945,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
   
+  // BERT 모델 상태 메시지 (선택적 기능)
+  if (message.type === 'BERT_STATUS') {
+    if (message.status === 'ready') {
+      console.log(`[BERT→BG] ✅ BERT 모델 준비 완료 (${message.modelName}, ${message.dimension}차원)`);
+      console.log(`[BERT→BG] 💡 향상된 검색: USE + TF-IDF + BERT 앙상블 사용 가능`);
+      console.log(`[BERT→BG] ⏱️ 로드 시간: ${message.loadTime}초`);
+    } else if (message.status === 'disabled') {
+      console.log(`[BERT→BG] ℹ️ BERT: ${message.message}`);
+      console.log(`[BERT→BG] ✅ USE (512차원) + TF-IDF 하이브리드 검색 사용 중`);
+      if (message.info) {
+        console.log(`[BERT→BG] 💡 ${message.info}`);
+      }
+    } else if (message.status === 'error') {
+      console.error(`[BERT→BG] ❌ BERT 로드 실패: ${message.error}`);
+      if (message.errorDetails) {
+        console.error(`[BERT→BG] 🔍 에러 카테고리: ${message.errorDetails.category}`);
+        console.error(`[BERT→BG] 🔍 에러 타입: ${message.errorDetails.type}`);
+        console.error(`[BERT→BG] 🔍 에러 메시지: ${message.errorDetails.message}`);
+        console.error(`[BERT→BG] 🔍 스택:`, message.errorDetails.stack);
+      }
+      console.log(`[BERT→BG] ℹ️ USE + TF-IDF 검색은 정상 작동합니다`);
+    } else if (message.status === 'loading') {
+      console.log(`[BERT→BG] ⏳ ${message.message || 'BERT 모델 로딩 중...'}`);
+    } else {
+      console.log(`[BERT→BG] ${message.status}: ${message.message || ''}`);
+    }
+    return true; // async response 처리
+  }
+  
   // 팝업에서 검색 결과 요청 시
   if (message.type === 'GET_SEARCH_RESULTS') {
     sendResponse(lastSearchResults);
     return false;
+  }
+  
+  // 평가 모드: 모든 검색 메서드 비교 실행
+  if (message.type === 'START_EVALUATION') {
+    (async () => {
+      try {
+        console.log(`[EVALUATION] 평가 시작: "${message.query}"`);
+        
+        // USE 임베딩 생성
+        const useEmbedding = await generateEmbedding(message.query);
+        
+        // BERT 임베딩 생성
+        const bertEmbedding = await generateBERTEmbedding(message.query);
+        
+        // 모든 검색 메서드 비교
+        const comparison = await compareAllSearchMethods(
+          message.query,
+          useEmbedding,
+          bertEmbedding
+        );
+        
+        console.log(`[EVALUATION] ✅ 평가 완료:`, comparison);
+        sendResponse({ success: true, comparison: comparison });
+      } catch (error) {
+        console.error('[EVALUATION] 평가 실패:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true; // 비동기 응답
   }
 });
 

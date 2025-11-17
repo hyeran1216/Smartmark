@@ -25,11 +25,23 @@
     },
     "web_accessible_resources": [
       {
-        "resources": ["textEmbedder.js", "utils/tfidf.js"],
+        "resources": [
+          "textEmbedder.js", 
+          "utils/tfidf.js", 
+          "search-methods.js", 
+          "offscreen-bert.js", 
+          "offscreen.html", 
+          "offscreen.js",
+          "ort.min.js",
+          "ort-wasm.wasm",
+          "ort-wasm-simd.wasm",
+          "ort-wasm-threaded.wasm",
+          "ort-wasm-simd-threaded.wasm"
+        ],
         "matches": ["<all_urls>"]
       }
     ],
     "content_security_policy": {
-      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co https://tfhub.dev https://storage.googleapis.com https://*.googleapis.com https://*.cloudfunctions.net https://generativelanguage.googleapis.com"
     }
   }

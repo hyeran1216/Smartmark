@@ -33,19 +33,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 function displayResults(bookmarks) {
     const resultsContainer = document.getElementById('results-output');
     
-    resultsContainer.innerHTML = bookmarks.map((bookmark) => `
-        <div class="result-card" onclick="openBookmark('${escapeHtml(bookmark.url)}')">
-            <div class="result-thumbnail">
-                ${bookmark.thumbnail ? `<img src="${bookmark.thumbnail}" alt="thumbnail" onerror="this.style.display='none'">` : '<span style="color: #999;">No Image</span>'}
+    resultsContainer.innerHTML = bookmarks.map((bookmark) => {
+        // 태그 HTML 생성 (상위 3개만)
+        const tagsHtml = bookmark.tags && bookmark.tags.length > 0
+            ? `<div class="result-tags">
+                ${bookmark.tags.slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
+               </div>`
+            : '';
+        
+        return `
+            <div class="result-card" onclick="openBookmark('${escapeHtml(bookmark.url)}')">
+                <div class="result-thumbnail">
+                    ${bookmark.thumbnail ? `<img src="${bookmark.thumbnail}" alt="thumbnail" onerror="this.style.display='none'">` : '<span style="color: #999;">No Image</span>'}
+                </div>
+                <div class="result-title">
+                    <span class="result-score">${bookmark.score}% 일치</span>
+                    ${escapeHtml(bookmark.title)}
+                </div>
+                <div class="result-url">${escapeHtml(bookmark.url)}</div>
+                <div class="result-summary">${escapeHtml(bookmark.summary)}</div>
+                ${tagsHtml}
             </div>
-            <div class="result-title">
-                <span class="result-score">${bookmark.score}% 일치</span>
-                ${escapeHtml(bookmark.title)}
-            </div>
-            <div class="result-url">${escapeHtml(bookmark.url)}</div>
-            <div class="result-summary">${escapeHtml(bookmark.summary)}</div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 /**

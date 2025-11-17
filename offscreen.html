@@ -5,11 +5,20 @@
     <title>SmartMark Offscreen Document</title>
 </head>
 <body>
-    <!-- Offscreen document for WebGL-based embedding generation -->
+    <!-- Offscreen document for multi-model embedding generation -->
+    
+    <!-- USE (Universal Sentence Encoder) - WebGL -->
     <script src="./tf.es2017.min.js"></script>
     <script src="./universal-sentence-encoder.min.js"></script>
     <script src="config.js"></script>
     <script src="textEmbedder.js"></script>
+    
+    <!-- BERT (all-MiniLM-L6-v2) - ONNX Runtime 직접 사용 -->
+    <!-- onnxruntime-web을 직접 사용하여 BERT 모델 로드 -->
+    <script src="ort.min.js"></script>
+    <script src="offscreen-bert.js"></script>
+    
+    <!-- Main offscreen coordinator -->
     <script src="offscreen.js"></script>
 </body>
 </html>

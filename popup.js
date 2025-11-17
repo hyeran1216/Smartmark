@@ -250,14 +250,64 @@ async function handleSave() {
                 }
                 
                 embeddingDetails = await window.textEmbedder.detailsEmbedding(metadata);
-                console.log('[DEBUG] 임베딩 생성 완료');
+                console.log('[DEBUG] USE 임베딩 생성 완료 (512차원)');
             } catch (error) {
-                console.error('[DEBUG] 임베딩 생성 실패:', error);
+                console.error('[DEBUG] USE 임베딩 생성 실패:', error);
                 embeddingDetails = metadata; // 임베딩 없이 저장
             }
         } else {
             console.warn('[DEBUG] textEmbedder를 사용할 수 없습니다.');
             embeddingDetails = metadata; // 임베딩 없이 저장
+        }
+        
+        // 4.5. BERT 임베딩 생성 및 KeyBERT 태그 추출 (선택적)
+        document.getElementById('status').textContent = 'BERT 임베딩 및 키워드 추출 시도 중...';
+        let bertEmbedding = null;
+        let autoTags = [];
+        
+        try {
+            // BERT 임베딩 생성 (384차원) - 실패 시 건너뜀
+            const fullText = `${title}. ${englishSummary}. ${englishKeySnippet}`;
+            console.log('[DEBUG] BERT 임베딩 생성 요청 (선택적)...');
+            
+            const bertResponse = await chrome.runtime.sendMessage({
+                type: 'GENERATE_BERT_EMBEDDING',
+                text: fullText
+            });
+            
+            if (bertResponse && bertResponse.success) {
+                bertEmbedding = bertResponse.embedding;
+                console.log(`[DEBUG] ✅ BERT 임베딩 생성 완료 (${bertResponse.dimension}차원, ${bertResponse.responseTime}ms)`);
+                
+                // KeyBERT 키워드 추출 (N-gram → 임베딩 유사도)
+                console.log('[DEBUG] KeyBERT 키워드 추출 시작...');
+                const ngramResponse = await chrome.runtime.sendMessage({
+                    type: 'EXTRACT_NGRAMS',
+                    text: fullText
+                });
+                
+                if (ngramResponse && ngramResponse.success) {
+                    console.log(`[DEBUG] N-gram 추출 완료: ${ngramResponse.ngrams.length}개`);
+                    
+                    // 상위 30개 n-gram으로 키워드 추출
+                    const topCandidates = ngramResponse.ngrams.slice(0, 30);
+                    const keywordResponse = await chrome.runtime.sendMessage({
+                        type: 'EXTRACT_KEYWORDS',
+                        text: fullText,
+                        candidates: topCandidates
+                    });
+                    
+                    if (keywordResponse && keywordResponse.success) {
+                        autoTags = keywordResponse.keywords.map(k => k.keyword);
+                        console.log(`[DEBUG] ✅ KeyBERT 키워드 추출 완료:`, autoTags);
+                    }
+                }
+            } else {
+                console.log('[DEBUG] ℹ️ BERT 사용 불가 - USE + TF-IDF로 계속 진행');
+            }
+        } catch (error) {
+            console.log('[DEBUG] ℹ️ BERT 임베딩/키워드 추출 실패 - USE + TF-IDF로 계속 진행');
+            console.log('[DEBUG] 오류 상세:', error.message);
         }
 
         // const userTargetLangCode = await getUserTargetLanguage();
@@ -265,8 +315,20 @@ async function handleSave() {
         const uiSummary = await window.textEmbedder._translateText(englishSummary, userTargetLangCode);
         console.log('[DEBUG] UI 표시용 번역 완료:', uiSummary);
 
-        // 6. 요약 정보, 썸네일 URL, 임베딩을 로컬 스토리지에 저장
-        await saveSummaryAndThumbnailWithEmbedding(newBookmark.id, title, englishSummary, englishKeySnippet, uiSummary, englishFolderName, thumbnailUrl, embeddingDetails?.embedding, embeddingDetails?.tfidfVector);
+        // 6. 요약 정보, 썸네일 URL, 임베딩, 태그를 로컬 스토리지에 저장
+        await saveSummaryAndThumbnailWithEmbedding(
+            newBookmark.id, 
+            title, 
+            englishSummary, 
+            englishKeySnippet, 
+            uiSummary, 
+            englishFolderName, 
+            thumbnailUrl, 
+            embeddingDetails?.embedding, 
+            embeddingDetails?.tfidfVector,
+            bertEmbedding,
+            autoTags
+        );
 
         // 7. TF-IDF 모델 재구축 (새 북마크 추가됨)
         await rebuildTfIdfModel();
@@ -617,7 +679,7 @@ async function saveSummaryAndThumbnail(bookmarkId, summaryText, thumbnailUrl) {
 }
 
 //요약 정보, 썸네일 URL, 임베딩을 로컬 스토리지에 저장
-async function saveSummaryAndThumbnailWithEmbedding(bookmarkId, title, englishSummary, englishKeySnippet, uiSummary, englishFolderName, thumbnailUrl, embedding, tfidfVector) {
+async function saveSummaryAndThumbnailWithEmbedding(bookmarkId, title, englishSummary, englishKeySnippet, uiSummary, englishFolderName, thumbnailUrl, embedding, tfidfVector, bertEmbedding, tags) {
     const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
     const allSummaries = await chrome.storage.local.get(storageKey);
     const summariesMap = allSummaries[storageKey] || {};
@@ -629,11 +691,14 @@ async function saveSummaryAndThumbnailWithEmbedding(bookmarkId, title, englishSu
         uiSummary: uiSummary,
         englishFolderName: englishFolderName,
         thumbnail: thumbnailUrl,
-        embedding: embedding || null,
-        tfidfVector: tfidfVector || null
+        embedding: embedding || null,           // USE 임베딩 (512차원)
+        tfidfVector: tfidfVector || null,       // TF-IDF 벡터
+        bertEmbedding: bertEmbedding || null,   // BERT 임베딩 (384차원)
+        tags: tags || [],                        // KeyBERT 자동 태그
+        url: currentUrl || null                  // URL 추가 (검색 결과 표시용)
     };  
     await chrome.storage.local.set({ [storageKey]: summariesMap });
-    console.log(`[STORAGE DEBUG] bookmark saved: ID ${bookmarkId}, embedding included: ${!!embedding}, tfidf included: ${!!tfidfVector}`);
+    console.log(`[STORAGE] 북마크 저장 완료: ID=${bookmarkId}, USE=${!!embedding}, TF-IDF=${!!tfidfVector}, BERT=${!!bertEmbedding}, Tags=${tags?.length || 0}`);
 }
 
 /**
@@ -775,6 +840,7 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
                 bookmark: bookmark,
                 summary: summaryData.uiSummary || 'No summary information',
                 thumbnail: summaryData.thumbnail || '',
+                tags: summaryData.tags || [],
                 similarity: finalScore,
                 semanticScore: semanticScore,
                 keywordScore: keywordScore,
@@ -802,15 +868,35 @@ function displaySearchResults(results, resultsElement, statusElement) {
     
     statusElement.textContent = `${results.length}개의 결과를 찾았습니다.`;
     
-    resultsElement.innerHTML = results.map(result => `
-        <div class="result-card">
-            <div class="result-thumbnail"><img src="${result.thumbnail}" alt="thumbnail"></div>
-            <div class="result-title" onclick="openBookmark('${result.bookmark.url}')">${result.bookmark.title}</div>
-            <div class="result-url">${result.bookmark.url}</div>
-            <div class="result-score">${result.score}% 일치</div>
-            <div style="font-size: 0.9em; color: #666; margin-top: 5px;">${result.summary}</div>
-        </div>
-    `).join('');
+    resultsElement.innerHTML = results.map(result => {
+        // 태그 HTML 생성 (상위 3개만)
+        const tagsHtml = result.tags && result.tags.length > 0
+            ? `<div class="result-tags">
+                ${result.tags.slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
+               </div>`
+            : '';
+        
+        return `
+            <div class="result-card">
+                <div class="result-thumbnail"><img src="${result.thumbnail}" alt="thumbnail"></div>
+                <div class="result-title" onclick="openBookmark('${result.bookmark.url}')">${result.bookmark.title}</div>
+                <div class="result-url">${result.bookmark.url}</div>
+                <div class="result-score">${result.score}% 일치</div>
+                <div style="font-size: 0.9em; color: #666; margin-top: 5px;">${result.summary}</div>
+                ${tagsHtml}
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * HTML 이스케이프 (XSS 방지)
+ */
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 /**

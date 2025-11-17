@@ -198,6 +198,7 @@ async function loadValidBookmarksWithFolders() {
                     folderInfo: folderInfo,
                     uiSummary: summaryObject.uiSummary,      // 💡 요약 텍스트 분리
                     thumbnail: summaryObject.thumbnail,  // 💡 썸네일 URL 분리
+                    tags: summaryObject.tags || [],
                     visitData: visitData 
                 });
                 
@@ -378,6 +379,21 @@ function renderSmartBookmarksSection(bookmarks) {
         summaryElement.textContent = summaryText;
         card.appendChild(summaryElement);
 
+        // 태그 표시 (상위 3개만)
+        if (summaryObject.tags && summaryObject.tags.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.classList.add('card-tags');
+            
+            summaryObject.tags.slice(0, 3).forEach(tag => {
+                const tagElement = document.createElement('span');
+                tagElement.classList.add('tag');
+                tagElement.textContent = tag;
+                tagsContainer.appendChild(tagElement);
+            });
+            
+            card.appendChild(tagsContainer);
+        }
+
         container.appendChild(card);
     });
     
@@ -541,6 +557,21 @@ function renderFolderGroup(folderInfo, bookmarks) {
         summaryElement.textContent = bookmark.uiSummary; 
         card.appendChild(summaryElement);
 
+        // 5. 태그 표시 (상위 3개만)
+        if (bookmark.tags && bookmark.tags.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.classList.add('card-tags');
+            
+            bookmark.tags.slice(0, 3).forEach(tag => {
+                const tagElement = document.createElement('span');
+                tagElement.classList.add('tag');
+                tagElement.textContent = tag;
+                tagsContainer.appendChild(tagElement);
+            });
+            
+            card.appendChild(tagsContainer);
+        }
+
         container.appendChild(card);
     });
     
@@ -643,8 +674,9 @@ function renderFolderSection(folderNode) {
     console.log(`[FOLDER DEBUG] 폴더 "${folderNode.title}"에서 ${bookmarks.length}개 북마크 렌더링 시작`);
     
     bookmarks.forEach(bookmark => {
-        // 로컬에 저장된 요약 정보 가져오기 (미리 로드한 데이터 사용)
-        const summaryText = bookmarkSummaries[bookmark.id] || "Gemini 요약 정보 없음";
+        // 로컬에 저장된 요약 정보 가져오기 (객체로!)
+        const summaryObject = bookmarkSummaries[bookmark.id] || { uiSummary: "Gemini 요약 정보 없음", thumbnail: "", tags: [] };
+        const summaryText = summaryObject.uiSummary || "Gemini 요약 정보 없음";
         
         console.log(`[BOOKMARK DEBUG] 북마크 렌더링: ID=${bookmark.id}, 제목="${bookmark.title}", 요약="${summaryText}"`);
         
@@ -678,6 +710,21 @@ function renderFolderSection(folderNode) {
         summaryElement.classList.add('card-summary');
         summaryElement.textContent = summaryText;
         card.appendChild(summaryElement);
+        
+        // 5. 태그 표시 (상위 3개만)
+        if (summaryObject.tags && summaryObject.tags.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.classList.add('card-tags');
+            
+            summaryObject.tags.slice(0, 3).forEach(tag => {
+                const tagElement = document.createElement('span');
+                tagElement.classList.add('tag');
+                tagElement.textContent = tag;
+                tagsContainer.appendChild(tagElement);
+            });
+            
+            card.appendChild(tagsContainer);
+        }
 
         container.appendChild(card);
     });
@@ -749,17 +796,26 @@ function displaySearchResultsInManager(results, resultsElement, statusElement) {
     
     statusElement.textContent = `${results.length}개의 결과를 찾았습니다.`;
     
-    resultsElement.innerHTML = results.map(result => `
-        <div class="result-card" onclick="window.open('${result.bookmark.url}', '_blank')">
-            <div class="result-thumbnail">
-                <img src="${result.thumbnail}" alt="thumbnail" onerror="this.src='https://www.google.com/s2/favicons?domain=${new URL(result.bookmark.url).hostname}&sz=128'; this.style.width='50px'; this.style.height='50px';">
+    resultsElement.innerHTML = results.map(result => {
+        // 태그 HTML 생성 (상위 3개만)
+        const tagsHtml = result.tags && result.tags.length > 0 
+            ? `<div class="result-tags">
+                ${result.tags.slice(0, 3).map(tag => `<span class="tag">${tag}</span>`).join('')}
+            </div>`
+            : '';
+        return `
+            <div class="result-card" onclick="window.open('${result.bookmark.url}', '_blank')">
+                <div class="result-thumbnail">
+                    <img src="${result.thumbnail}" alt="thumbnail" onerror="this.src='https://www.google.com/s2/favicons?domain=${new URL(result.bookmark.url).hostname}&sz=128'; this.style.width='50px'; this.style.height='50px';">
+                </div>
+                <div class="result-title">${result.bookmark.title}</div>
+                <div class="result-url">${result.bookmark.url}</div>
+                <div class="result-summary">${result.summary}</div>
+                ${tagsHtml}
+                <div class="result-score">${result.score}% 일치</div>
             </div>
-            <div class="result-title">${result.bookmark.title}</div>
-            <div class="result-url">${result.bookmark.url}</div>
-            <div class="result-summary">${result.summary}</div>
-            <div class="result-score">${result.score}% 일치</div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
@@ -859,6 +915,7 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
                 bookmark: bookmark,
                 summary: summaryData.uiSummary || 'No summary information',
                 thumbnail: summaryData.thumbnail || '',
+                tags: summaryData.tags || [],
                 similarity: finalScore,
                 semanticScore: semanticScore,
                 keywordScore: keywordScore,

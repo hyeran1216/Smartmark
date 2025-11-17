@@ -64,6 +64,25 @@
         .result-title { font-weight: bold; font-size: 1.1em; color: #1a0dab; cursor: pointer; }
         .result-url { font-size: 0.8em; color: #006621; }
         .result-score { float: right; font-size: 0.8em; color: #f4b400; }
+        
+        /* 태그 스타일 */
+        .result-tags {
+            display: flex;
+            gap: 4px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+            clear: both;
+        }
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
 
         body { width: 300px; padding: 15px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         label { display: block; margin-top: 10px; font-weight: 600; color: #333; }

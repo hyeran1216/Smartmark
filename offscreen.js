@@ -1,9 +1,11 @@
 // Offscreen Document Script for SmartMark
-// WebGL을 사용한 임베딩 생성을 백그라운드에서 처리
+// Multi-model embeddings: USE (WebGL) + BERT (WASM)
 
-console.log('[OFFSCREEN] Offscreen document 초기화 중...');
+console.log('[OFFSCREEN] Multi-model Offscreen document 초기화 중...');
 
-let embedderReady = false;
+// Model status tracking
+let useEmbedderReady = false;
+let bertEmbedderReady = false;
 let loadingError = null;
 const loadStartTime = Date.now();
 
@@ -24,87 +26,108 @@ function notifyBackground(message) {
     }
 }
 
-// TextEmbedder 초기화
+// USE (TextEmbedder) 초기화
 (async () => {
     try {
-        console.log('[OFFSCREEN] 스크립트 로드 확인 중...');
-        notifyBackground({ status: 'script_loaded', message: '스크립트 로드 확인 중...' });
+        console.log('[OFFSCREEN] USE 모델 로드 확인 중...');
+        notifyBackground({ status: 'script_loaded', message: 'USE 모델 로드 시작...' });
         
         // textEmbedder 객체 존재 확인
         if (!window.textEmbedder) {
-            const errorMsg = 'textEmbedder 객체를 찾을 수 없습니다. textEmbedder.js가 로드되지 않았을 수 있습니다.';
+            const errorMsg = 'textEmbedder 객체를 찾을 수 없습니다.';
             console.error(`[OFFSCREEN] ${errorMsg}`);
             loadingError = errorMsg;
             notifyBackground({ status: 'error', message: errorMsg });
             return;
         }
         
-        console.log('[OFFSCREEN] TextEmbedder 발견. 모델 로드 시작...');
-        console.log(`[OFFSCREEN] TensorFlow.js 버전: ${tf.version.tfjs}`);
-        console.log(`[OFFSCREEN] 초기 백엔드: ${tf.getBackend()}`);
+        console.log('[OFFSCREEN-USE] TensorFlow.js 버전:', tf.version.tfjs);
+        console.log('[OFFSCREEN-USE] 초기 백엔드:', tf.getBackend());
         
         notifyBackground({ 
             status: 'loading', 
-            message: 'USE 모델 다운로드 및 로드 중... (첫 실행 시 1-2분 소요될 수 있습니다)',
+            message: 'USE 모델 다운로드 중... (첫 실행 시 1-2분)',
             backend: tf.getBackend()
         });
         
-        // 10초마다 진행 상황 알림
         const progressInterval = setInterval(() => {
             const elapsed = ((Date.now() - loadStartTime) / 1000).toFixed(0);
-            console.log(`[OFFSCREEN] 모델 로딩 중... (${elapsed}초 경과)`);
-            notifyBackground({ 
-                status: 'loading', 
-                message: `모델 로딩 중... (${elapsed}초 경과)` 
-            });
+            console.log(`[OFFSCREEN-USE] 로딩 중... (${elapsed}초)`);
         }, 10000);
         
-        // textEmbedder.initialize() 메서드 호출 (loadModel이 아님)
         await window.textEmbedder.initialize();
-        
         clearInterval(progressInterval);
         
         const loadTime = ((Date.now() - loadStartTime) / 1000).toFixed(2);
-        embedderReady = true;
+        useEmbedderReady = true;
         
-        console.log(`[OFFSCREEN] ✅ TextEmbedder 로드 완료! (${loadTime}초 소요)`);
-        console.log(`[OFFSCREEN] 최종 백엔드: ${tf.getBackend()}`);
-        console.log(`[OFFSCREEN] 메모리 사용: ${JSON.stringify(tf.memory())}`);
+        console.log(`[OFFSCREEN-USE] ✅ 로드 완료! (${loadTime}초, 512차원)`);
+        console.log(`[OFFSCREEN-USE] 백엔드: ${tf.getBackend()}`);
         
         notifyBackground({ 
             status: 'ready', 
-            message: `TextEmbedder 로드 완료 (${loadTime}초 소요)`,
+            message: `USE 모델 로드 완료 (${loadTime}초)`,
+            model: 'USE',
+            dimension: 512,
             backend: tf.getBackend(),
             loadTime: parseFloat(loadTime)
         });
     } catch (error) {
-        const loadTime = ((Date.now() - loadStartTime) / 1000).toFixed(2);
-        console.error(`[OFFSCREEN] ❌ TextEmbedder 초기화 실패 (${loadTime}초 후):`, error);
-        console.error('[OFFSCREEN] 오류 스택:', error.stack);
-        
+        console.error('[OFFSCREEN-USE] ❌ 초기화 실패:', error);
         loadingError = error.message;
         notifyBackground({ 
             status: 'error', 
-            message: `TextEmbedder 초기화 실패: ${error.message}`,
-            error: error.message,
-            stack: error.stack
+            message: `USE 초기화 실패: ${error.message}`,
+            model: 'USE',
+            error: error.message
         });
     }
 })();
 
-// Background.js로부터 메시지 수신
+// BERT 모델 상태 모니터링
+setInterval(() => {
+    if (window.bertEmbedder && window.bertEmbedder.ready()) {
+        if (!bertEmbedderReady) {
+            bertEmbedderReady = true;
+            console.log('[OFFSCREEN] ✅ BERT 모델도 준비 완료!');
+        }
+    }
+}, 1000);
+
+// Background.js로부터 메시지 수신 (Multi-model support)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[OFFSCREEN] 메시지 수신:', message);
 
+    // USE 임베딩 생성 (기본, 512차원)
     if (message.type === 'GENERATE_EMBEDDING') {
-        handleEmbeddingRequest(message.text, sendResponse);
-        return true; // 비동기 응답을 위해 true 반환
+        handleUSEEmbeddingRequest(message.text, sendResponse);
+        return true;
+    }
+    
+    // BERT 임베딩 생성 (384차원)
+    if (message.type === 'GENERATE_BERT_EMBEDDING') {
+        handleBERTEmbeddingRequest(message.text, sendResponse);
+        return true;
+    }
+    
+    // KeyBERT 키워드 추출
+    if (message.type === 'EXTRACT_KEYWORDS') {
+        handleKeywordExtraction(message.text, message.candidates, sendResponse);
+        return true;
+    }
+    
+    // N-gram 추출
+    if (message.type === 'EXTRACT_NGRAMS') {
+        handleNGramExtraction(message.text, sendResponse);
+        return true;
     }
 
+    // 모델 준비 상태 확인
     if (message.type === 'CHECK_READY') {
         const elapsed = ((Date.now() - loadStartTime) / 1000).toFixed(1);
         sendResponse({ 
-            ready: embedderReady,
+            use: useEmbedderReady,
+            bert: bertEmbedderReady,
             error: loadingError,
             elapsed: parseFloat(elapsed)
         });
@@ -115,28 +138,128 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * 임베딩 생성 요청 처리
- * @param {string} text - 임베딩을 생성할 텍스트
- * @param {Function} sendResponse - 응답 콜백
+ * USE 임베딩 생성 요청 처리 (512차원)
  */
-async function handleEmbeddingRequest(text, sendResponse) {
-    if (!embedderReady) {
-        console.warn('[OFFSCREEN] TextEmbedder가 아직 준비되지 않았습니다.');
-        sendResponse({ success: false, error: 'Embedder not ready' });
+async function handleUSEEmbeddingRequest(text, sendResponse) {
+    if (!useEmbedderReady) {
+        console.warn('[OFFSCREEN] USE 모델이 아직 준비되지 않았습니다.');
+        sendResponse({ success: false, error: 'USE not ready' });
         return;
     }
 
     try {
-        console.log(`[OFFSCREEN] 임베딩 생성 시작: "${text.substring(0, 50)}..."`);
+        const startTime = performance.now();
+        console.log(`[OFFSCREEN-USE] 임베딩 생성: "${text.substring(0, 50)}..."`);
+        
         const embedding = await window.textEmbedder.embedText(text);
-        console.log(`[OFFSCREEN] 임베딩 생성 완료. 차원: ${embedding.length}`);
+        const elapsedTime = (performance.now() - startTime).toFixed(2);
+        
+        console.log(`[OFFSCREEN-USE] ✅ 완료 (${elapsedTime}ms, ${embedding.length}차원)`);
         
         sendResponse({ 
             success: true, 
-            embedding: embedding 
+            embedding: embedding,
+            dimension: embedding.length,
+            model: 'USE',
+            responseTime: parseFloat(elapsedTime)
         });
     } catch (error) {
-        console.error('[OFFSCREEN] 임베딩 생성 실패:', error);
+        console.error('[OFFSCREEN-USE] 임베딩 생성 실패:', error);
+        sendResponse({ 
+            success: false, 
+            error: error.message,
+            model: 'USE'
+        });
+    }
+}
+
+/**
+ * BERT 임베딩 생성 요청 처리 (384차원)
+ */
+async function handleBERTEmbeddingRequest(text, sendResponse) {
+    if (!bertEmbedderReady || !window.bertEmbedder) {
+        console.warn('[OFFSCREEN] BERT 모델이 아직 준비되지 않았습니다.');
+        sendResponse({ success: false, error: 'BERT not ready' });
+        return;
+    }
+
+    try {
+        const startTime = performance.now();
+        console.log(`[OFFSCREEN-BERT] 임베딩 생성: "${text.substring(0, 50)}..."`);
+        
+        const embedding = await window.bertEmbedder.embed(text);
+        const elapsedTime = (performance.now() - startTime).toFixed(2);
+        
+        console.log(`[OFFSCREEN-BERT] ✅ 완료 (${elapsedTime}ms, ${embedding.length}차원)`);
+        
+        sendResponse({ 
+            success: true, 
+            embedding: embedding,
+            dimension: embedding.length,
+            model: 'BERT',
+            responseTime: parseFloat(elapsedTime)
+        });
+    } catch (error) {
+        console.error('[OFFSCREEN-BERT] 임베딩 생성 실패:', error);
+        sendResponse({ 
+            success: false, 
+            error: error.message,
+            model: 'BERT'
+        });
+    }
+}
+
+/**
+ * KeyBERT 키워드 추출
+ */
+async function handleKeywordExtraction(text, candidates, sendResponse) {
+    if (!bertEmbedderReady || !window.bertEmbedder) {
+        sendResponse({ success: false, error: 'BERT not ready for keyword extraction' });
+        return;
+    }
+
+    try {
+        const startTime = performance.now();
+        console.log(`[KeyBERT] 키워드 추출 시작: ${candidates.length}개 후보`);
+        
+        const keywords = await window.bertEmbedder.extractKeywords(text, candidates);
+        const elapsedTime = (performance.now() - startTime).toFixed(2);
+        
+        console.log(`[KeyBERT] ✅ 완료 (${elapsedTime}ms):`, keywords);
+        
+        sendResponse({ 
+            success: true, 
+            keywords: keywords,
+            responseTime: parseFloat(elapsedTime)
+        });
+    } catch (error) {
+        console.error('[KeyBERT] 키워드 추출 실패:', error);
+        sendResponse({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+}
+
+/**
+ * N-gram 추출
+ */
+async function handleNGramExtraction(text, sendResponse) {
+    if (!window.bertEmbedder) {
+        sendResponse({ success: false, error: 'BERT embedder not loaded' });
+        return;
+    }
+
+    try {
+        const ngrams = window.bertEmbedder.extractNGrams(text);
+        console.log(`[N-gram] ${ngrams.length}개 추출 완료`);
+        
+        sendResponse({ 
+            success: true, 
+            ngrams: ngrams 
+        });
+    } catch (error) {
+        console.error('[N-gram] 추출 실패:', error);
         sendResponse({ 
             success: false, 
             error: error.message 
