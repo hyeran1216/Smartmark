@@ -12,7 +12,10 @@
       "scripting",
       "storage",
       "contextMenus",
-      "tabs"
+      "tabs",
+      "webRequest",
+      "offscreen",
+      "notifications"
     ],
     "host_permissions": [
         "<all_urls>"

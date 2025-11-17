@@ -809,7 +809,6 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
     
     for (const bookmark of bookmarkList) {
         const summaryData = summariesMap[bookmark.id];
-        console.log(`[SEARCH DEBUG] 북마크 ID ${bookmark.id}: summaryData 존재=${!!summaryData}, embedding 존재=${!!(summaryData?.embedding)}, tfidfVector 존재=${!!(summaryData?.tfidfVector)}`);
         
         if (summaryData && summaryData.embedding) {
             // Semantic 점수 (임베딩 기반 코사인 유사도)

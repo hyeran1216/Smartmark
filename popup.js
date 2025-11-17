@@ -16,6 +16,7 @@ const searchModeButton = document.getElementById('searchModeButton');
  */
 async function main() {
     try {
+        // 일반적인 초기화
         await getCurrentTabInfo();
         updateUiWithCurrentTab();
         await populateFolderSelect();
@@ -669,7 +670,6 @@ async function handleSearch() {
         // 2. 검색어 임베딩 생성
         statusElement.textContent = '검색어 분석 중...';
         const queryEmbedding = await window.textEmbedder.embedText(searchQuery);
-        console.log('[SEARCH DEBUG] 검색어 임베딩 생성 완료');
         
         // 3. 저장된 북마크들과 임베딩 가져오기
         statusElement.textContent = '북마크 검색 중...';
@@ -710,9 +710,7 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
     // 2. 저장된 임베딩 정보 가져오기
     const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
     const allSummaries = await chrome.storage.local.get(storageKey);
-    console.log(`[SEARCH DEBUG] allSummaries: ${JSON.stringify(allSummaries, null, 2)}`);
     const summariesMap = allSummaries[storageKey] || {};
-    console.log(`[SEARCH DEBUG] summariesMap: ${JSON.stringify(summariesMap, null, 2)}`);
 
     // 3. TF-IDF 모델 로드
     const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
@@ -727,7 +725,6 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
         
         // 검색어의 TF-IDF 벡터 계산
         queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQuery);
-        console.log(`[SEARCH DEBUG] 검색어 TF-IDF 벡터 생성 완료. 길이: ${queryTfIdfVector.length}`);
     }
     
     // 4. 하이브리드 스코어링
@@ -737,7 +734,6 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
     
     for (const bookmark of bookmarkList) {
         const summaryData = summariesMap[bookmark.id];
-        console.log(`[SEARCH DEBUG] 북마크 ID ${bookmark.id}: summaryData 존재=${!!summaryData}, embedding 존재=${!!(summaryData?.embedding)}, tfidfVector 존재=${!!(summaryData?.tfidfVector)}`);
         
         if (summaryData && summaryData.embedding) {
             // Semantic 점수 (임베딩 기반 코사인 유사도)
@@ -757,7 +753,6 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
                         queryTfIdfVector,
                         summaryData.tfidfVector
                     );
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 계산: query 벡터 길이=${queryTfIdfVector.length}, bookmark 벡터 길이=${summaryData.tfidfVector.length}, keywordScore=${keywordScore.toFixed(4)}`);
                 }
             } else {
                 // 왜 Keyword 점수가 0인지 명확히 로그
