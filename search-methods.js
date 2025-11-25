@@ -14,6 +14,50 @@ const EVALUATION_MODE = {
 let currentEvaluationMode = EVALUATION_MODE.SINGLE;
 
 /**
+ * 코사인 유사도 계산
+ */
+function cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB) {
+        console.warn('[SIMILARITY] 벡터가 null 또는 undefined:', { vecA: !!vecA, vecB: !!vecB });
+        return 0;
+    }
+    
+    if (!Array.isArray(vecA) || !Array.isArray(vecB)) {
+        console.warn('[SIMILARITY] 벡터가 배열이 아님:', { 
+            vecAType: typeof vecA, 
+            vecBType: typeof vecB,
+            vecAIsArray: Array.isArray(vecA),
+            vecBIsArray: Array.isArray(vecB)
+        });
+        return 0;
+    }
+    
+    if (vecA.length !== vecB.length) {
+        console.warn('[SIMILARITY] 벡터 차원 불일치:', { vecA: vecA.length, vecB: vecB.length });
+        return 0;
+    }
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+    
+    normA = Math.sqrt(normA);
+    normB = Math.sqrt(normB);
+    
+    if (normA === 0 || normB === 0) {
+        return 0;
+    }
+    
+    return dotProduct / (normA * normB);
+}
+
+/**
  * USE 전용 검색 (512차원 임베딩만 사용)
  */
 async function searchWithUSEOnly(queryEmbedding, threshold = 0.3) {
@@ -24,9 +68,19 @@ async function searchWithUSEOnly(queryEmbedding, threshold = 0.3) {
     const results = [];
     
     console.log(`[SEARCH-USE] USE 전용 검색 시작 (임계값: ${threshold})`);
+    console.log(`[SEARCH-USE] 쿼리 임베딩:`, Array.isArray(queryEmbedding) ? `${queryEmbedding.length}차원` : typeof queryEmbedding);
+    
+    let bookmarkCount = 0;
+    let embeddingCount = 0;
     
     for (const [bookmarkId, summaryData] of Object.entries(summariesMap)) {
+        bookmarkCount++;
         if (summaryData && summaryData.embedding) {
+            embeddingCount++;
+            if (embeddingCount === 1) {
+                // 첫 번째 임베딩만 로깅
+                console.log(`[SEARCH-USE] 첫 번째 저장된 임베딩:`, Array.isArray(summaryData.embedding) ? `${summaryData.embedding.length}차원` : typeof summaryData.embedding);
+            }
             const similarity = cosineSimilarity(queryEmbedding, summaryData.embedding);
             
             if (similarity >= threshold) {
@@ -50,6 +104,7 @@ async function searchWithUSEOnly(queryEmbedding, threshold = 0.3) {
     const sorted = results.sort((a, b) => b.similarity - a.similarity).slice(0, 10);
     
     console.log(`[SEARCH-USE] ✅ 완료: ${sorted.length}개 (${responseTime.toFixed(2)}ms)`);
+    console.log(`[SEARCH-USE] 총 북마크: ${bookmarkCount}개, 임베딩 있음: ${embeddingCount}개`);
     
     return {
         results: sorted,
@@ -137,6 +192,7 @@ async function searchWithBERTOnly(queryEmbedding, threshold = 0.3) {
     const results = [];
     
     console.log(`[SEARCH-BERT] BERT 전용 검색 시작 (임계값: ${threshold})`);
+    console.log(`[SEARCH-BERT] 쿼리 임베딩:`, Array.isArray(queryEmbedding) ? `${queryEmbedding.length}차원` : typeof queryEmbedding);
     
     for (const [bookmarkId, summaryData] of Object.entries(summariesMap)) {
         if (summaryData && summaryData.bertEmbedding) {
@@ -183,6 +239,7 @@ async function searchWithHybrid(queryEmbedding, searchQuery, alpha = 0.4, beta =
     const results = [];
     
     console.log(`[SEARCH-HYBRID] Hybrid 검색 시작 (α=${alpha}, β=${beta}, 임계값=${threshold})`);
+    console.log(`[SEARCH-HYBRID] 쿼리 임베딩:`, Array.isArray(queryEmbedding) ? `${queryEmbedding.length}차원` : typeof queryEmbedding);
     
     // TF-IDF 모델 로드
     const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
@@ -258,6 +315,8 @@ async function searchWithEnsemble(useEmbedding, bertEmbedding, searchQuery, weig
     const results = [];
     
     console.log(`[SEARCH-ENSEMBLE] Ensemble 검색 시작 (USE=${weights.use}, TF-IDF=${weights.tfidf}, BERT=${weights.bert})`);
+    console.log(`[SEARCH-ENSEMBLE] USE 임베딩:`, Array.isArray(useEmbedding) ? `${useEmbedding.length}차원` : typeof useEmbedding);
+    console.log(`[SEARCH-ENSEMBLE] BERT 임베딩:`, Array.isArray(bertEmbedding) ? `${bertEmbedding.length}차원` : typeof bertEmbedding);
     
     // TF-IDF 모델 로드
     const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';

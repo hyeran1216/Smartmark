@@ -125,7 +125,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 모델 준비 상태 확인
     if (message.type === 'CHECK_READY') {
         const elapsed = ((Date.now() - loadStartTime) / 1000).toFixed(1);
+        const ready = useEmbedderReady;
         sendResponse({ 
+            ready: ready,
             use: useEmbedderReady,
             bert: bertEmbedderReady,
             error: loadingError,

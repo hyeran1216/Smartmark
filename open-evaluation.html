@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Open Evaluation Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+        }
+        
+        .container {
+            text-align: center;
+            color: white;
+        }
+        
+        h1 {
+            font-size: 3em;
+            margin-bottom: 20px;
+        }
+        
+        p {
+            font-size: 1.2em;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        
+        button {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 20px 40px;
+            font-size: 1.2em;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: 600;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+        }
+        
+        .info {
+            margin-top: 40px;
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 SmartMark Evaluation</h1>
+        <p>검색 성능 평가 대시보드를 열겠습니다</p>
+        <button onclick="openDashboard()">Open Dashboard</button>
+        
+        <div class="info">
+            <p>대시보드가 열리지 않으면:</p>
+            <p>chrome-extension://[확장프로그램ID]/evaluation-dashboard.html</p>
+            <p>위 주소를 직접 브라우저에 입력하세요</p>
+        </div>
+    </div>
+    
+    <script>
+        function openDashboard() {
+            // 현재 확장 프로그램의 ID 가져오기
+            const url = chrome.runtime.getURL('evaluation-dashboard.html');
+            chrome.tabs.create({ url: url });
+        }
+        
+        // 자동으로 열기
+        setTimeout(() => {
+            openDashboard();
+        }, 1000);
+    </script>
+</body>
+</html>
+
