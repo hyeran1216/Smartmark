@@ -15,11 +15,19 @@
       "tabs",
       "webRequest",
       "offscreen",
-      "notifications"
+      "notifications",
+      "identity"
     ],
     "host_permissions": [
-        "<all_urls>"
+        "<all_urls>",
+        "https://www.googleapis.com/youtube/v3/*"
     ],
+    "oauth2": {
+      "client_id": "236457259641-uph1rkc15vl57gdj40ilf4be2ork183r.apps.googleusercontent.com",
+      "scopes": [
+        "https://www.googleapis.com/auth/youtube.force-ssl"
+      ]
+    },
     "background": {
       "service_worker": "background.js"
     },

@@ -80,7 +80,21 @@ async function initializeBERT() {
         console.log(`[BERT] 📥 모델 다운로드 시작`);
         console.log(`[BERT] URL: ${BERT_CONFIG.modelUrl}`);
         console.log(`[BERT] 다운로드 크기: 약 5MB (양자화 모델)`);
-        
+
+        // 실제 파일 크기 확인
+        try {
+            const headResponse = await fetch(BERT_CONFIG.modelUrl, { method: 'HEAD' });
+            const contentLength = headResponse.headers.get('content-length');
+            if (contentLength) {
+                const sizeMB = (parseInt(contentLength) / (1024 * 1024)).toFixed(2);
+                console.log(`[BERT] �� 서버 응답 크기: ${sizeMB}MB (${contentLength} bytes)`);
+            } else {
+                console.log(`[BERT] �� 서버가 Content-Length를 제공하지 않습니다.`);
+            }
+        } catch (fetchError) {
+            console.warn(`[BERT] 파일 크기 확인 실패:`, fetchError.message);
+        }
+
         // Progress 모니터링
         const progressInterval = setInterval(() => {
             const elapsed = ((Date.now() - bertLoadStartTime) / 1000).toFixed(0);
@@ -90,11 +104,18 @@ async function initializeBERT() {
         // ONNX 모델 로드 시도
         console.log('[BERT] 🔧 InferenceSession 생성 시작...');
         try {
+            // 실제 다운로드 진행 상황 추적
+            let downloadedBytes = 0;
+            const downloadStartTime = Date.now();
+            
             bertSession = await ortRuntime.InferenceSession.create(BERT_CONFIG.modelUrl, {
                 executionProviders: ['wasm'],
                 graphOptimizationLevel: 'all'
             });
-            console.log('[BERT] ✅ InferenceSession 생성 완료');
+            
+            const downloadTime = ((Date.now() - downloadStartTime) / 1000).toFixed(2);
+            console.log(`[BERT] ✅ InferenceSession 생성 완료 (다운로드 시간: ${downloadTime}초)`);
+            
         } catch (sessionError) {
             console.error('[BERT] ❌ InferenceSession 생성 실패:', sessionError);
             throw sessionError;

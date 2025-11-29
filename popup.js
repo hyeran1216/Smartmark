@@ -175,10 +175,39 @@ async function handleSave() {
                 return;
             }
         }
-        
         // 1. 페이지 콘텐츠 추출 및 요약 생성 (가장 오래 걸리는 단계)
         console.log('[DEBUG] 1. 페이지 콘텐츠 추출 시도...');
-        const content = await getPageContentForSummary();
+        let content = "";
+
+        // YouTube URL인 경우 자막 추출
+        if (isYouTubeUrl(currentUrl)) {
+            const videoId = extractYouTubeVideoId(currentUrl);
+            if (videoId) {
+                console.log(`[DEBUG] YouTube 동영상 감지: ${videoId}`);
+                document.getElementById('status').textContent = 'YouTube 자막 추출 중...';
+                try {
+                    content = await getYouTubeCaptionText(videoId);
+                    if (content) {
+                        console.log(`[DEBUG] YouTube 자막 추출 성공. 텍스트 길이: ${content.length}`);
+                    } else {
+                        console.warn('[DEBUG] YouTube 자막을 찾을 수 없습니다.');
+                        document.getElementById('status').textContent = 'YouTube 자막을 찾을 수 없습니다. 일반 페이지로 처리합니다.';
+                        content = await getPageContentForSummary();
+                    }
+                } catch (error) {
+                    console.error('[DEBUG] YouTube 자막 추출 실패:', error);
+                    document.getElementById('status').textContent = 'YouTube 자막 추출 실패. 일반 페이지로 처리합니다.';
+                    content = await getPageContentForSummary();
+                }
+            } else {
+                console.warn('[DEBUG] YouTube URL이지만 video ID를 추출할 수 없습니다.');
+                content = await getPageContentForSummary();
+            }
+        } else {
+            // 일반 웹페이지 처리
+            content = await getPageContentForSummary();
+        }
+
         let summary = "No summary information";
 
         if (content) {
@@ -635,9 +664,26 @@ async function removeSummaryFromLocal(bookmarkId) {
 }
 
 /**
- * Cloud Function을 호출하여 썸네일 URL을 가져옵니다.
+ * 썸네일 URL을 가져옵니다.
+ * YouTube URL인 경우 YouTube 공식 썸네일 URL을 사용합니다.
+ * 그 외의 경우 Cloud Function을 호출합니다.
  */
 async function getThumbnailUrl(url) {
+    // YouTube URL인 경우 YouTube 공식 썸네일 URL 사용
+    if (isYouTubeUrl(url)) {
+        const videoId = extractYouTubeVideoId(url);
+        if (videoId) {
+            // 표준화질 썸네일 (640×480)
+            const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/sddefault.jpg`;
+            console.log(`[YouTube] 썸네일 URL 생성: ${thumbnailUrl}`);
+            return thumbnailUrl;
+        } else {
+            console.warn('[YouTube] video ID를 추출할 수 없어 기본 썸네일 사용');
+            return 'placeholder_url';
+        }
+    }
+    
+    // 일반 웹페이지인 경우 Cloud Function 호출
     if (!window.CONFIG || !window.CONFIG.THUMBNAIL_API_URL || window.CONFIG.THUMBNAIL_API_URL.includes('YOUR_THUMBNAIL_API_URL_HERE')) {
          console.warn("썸네일 API URL이 설정되지 않았습니다. 플레이스홀더를 사용합니다.");
          return 'placeholder_url'; // API 설정 전 임시 URL
@@ -920,5 +966,137 @@ async function getFolderNameById(folderId) {
     } catch (error) {
         console.error('[FOLDER DEBUG] 폴더 이름 가져오기 실패:', error);
         return '기타 북마크';
+    }
+}
+/**
+ * YouTube URL에서 video ID 추출
+ * @param {string} url YouTube URL
+ * @returns {string|null} video ID 또는 null
+ */
+function extractYouTubeVideoId(url) {
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+        /youtube\.com\/watch\?.*v=([^&\n?#]+)/
+    ];
+    
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+            return match[1];
+        }
+    }
+    return null;
+}
+
+/**
+ * YouTube URL인지 확인
+ * @param {string} url 확인할 URL
+ * @returns {boolean} YouTube URL 여부
+ */
+function isYouTubeUrl(url) {
+    return /youtube\.com|youtu\.be/.test(url);
+}
+
+
+/**
+ * YouTube 페이지에서 직접 자막 추출 (Content Script 사용)
+ * @param {string} videoId YouTube 동영상 ID (사용하지 않지만 호환성을 위해 유지)
+ * @returns {Promise<string>} 자막 텍스트
+ */
+async function extractYouTubeCaptionFromPage(videoId) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) return "";
+    
+    const tabId = tabs[0].id;
+    
+    // YouTube 페이지가 아니면 자막을 추출할 수 없음
+    if (!tabs[0].url.includes('youtube.com')) {
+        console.warn('[YouTube] 현재 탭이 YouTube 페이지가 아닙니다.');
+        return "";
+    }
+    
+    try {
+        // Content Script 주입하여 자막 추출
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            func: extractCaptionFromYouTubePage
+        });
+        
+        if (results && results[0] && results[0].result) {
+            return results[0].result;
+        }
+        
+        return "";
+    } catch (error) {
+        console.error('[YouTube] 페이지에서 자막 추출 실패:', error);
+        return "";
+    }
+}
+
+/**
+ * YouTube 페이지에서 자막을 추출하는 함수 (Content Script에서 실행)
+ * 자막 패널(ytd-transcript-renderer)의 DOM 구조를 직접 쿼리하여 추출
+ * 이 함수는 executeScript로 주입되어 실행됩니다.
+ */
+function extractCaptionFromYouTubePage() {
+    try {
+        // YouTube 자막 패널에서 자막 세그먼트 추출
+        // ytd-transcript-segment-renderer 요소의 segment-text 클래스를 사용
+        const transcriptSegments = document.querySelectorAll('ytd-transcript-segment-renderer');
+        
+        if (transcriptSegments.length > 0) {
+            console.log(`[YouTube] 자막 세그먼트 발견: ${transcriptSegments.length}개`);
+            
+            const captionTexts = Array.from(transcriptSegments)
+                .map(segment => {
+                    // segment-text 클래스를 가진 요소에서 텍스트 추출
+                    const segmentText = segment.querySelector('.segment-text');
+                    if (segmentText) {
+                        return segmentText.textContent || segmentText.innerText || '';
+                    }
+                    // segment-text가 없으면 세그먼트 자체의 텍스트 사용
+                    return segment.textContent || segment.innerText || '';
+                })
+                .filter(text => text.trim().length > 0)
+                .join(' ');
+            
+            if (captionTexts.trim()) {
+                console.log(`[YouTube] 자막 추출 성공: ${captionTexts.length}자`);
+                return captionTexts.trim();
+            }
+        }
+        
+        // 자막 패널이 열려있지 않은 경우를 대비한 대체 방법
+        // 자막 패널을 찾을 수 없으면 빈 문자열 반환
+        console.warn('[YouTube] 자막 패널을 찾을 수 없습니다. 자막 패널이 열려있는지 확인해주세요.');
+        return "";
+        
+    } catch (error) {
+        console.error('[YouTube] 자막 추출 오류:', error);
+        return "";
+    }
+}
+
+/**
+ * YouTube 자막을 가져와서 텍스트로 변환
+ * 자막 패널(ytd-transcript-renderer)의 DOM 구조를 직접 쿼리하여 추출
+ * @param {string} videoId YouTube 동영상 ID
+ * @returns {Promise<string>} 자막 텍스트
+ */
+async function getYouTubeCaptionText(videoId) {
+    try {
+        console.log('[YouTube] 페이지에서 자막 추출 시도...');
+        const captionText = await extractYouTubeCaptionFromPage(videoId);
+        
+        if (captionText && captionText.trim()) {
+            console.log(`[YouTube] ✅ 자막 추출 성공: ${captionText.length}자`);
+            return captionText;
+        }
+        
+        throw new Error("YouTube 자막을 찾을 수 없습니다. 자막 패널이 열려있는지 확인해주세요.");
+        
+    } catch (error) {
+        console.error('[YouTube] 자막 가져오기 실패:', error);
+        throw error;
     }
 }
