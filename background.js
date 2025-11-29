@@ -15,8 +15,16 @@ let bookmarkUrls = {};      // 북마크 ID를 URL로 매핑한 맵
 let tfidfModel = null;
 
 // 확장 프로그램 설치/업데이트/시작 시 북마크 URL 맵을 로드
-chrome.runtime.onInstalled.addListener(initializeBookmarkMap);
-chrome.runtime.onStartup.addListener(initializeBookmarkMap);
+chrome.runtime.onInstalled.addListener(async () => {
+    await initializeBookmarkMap();
+    // 90일 경과 북마크 체크 (초기화 후 약간의 지연)
+    setTimeout(() => checkInactiveBookmarks(), 5000);
+});
+chrome.runtime.onStartup.addListener(async () => {
+    await initializeBookmarkMap();
+    // 90일 경과 북마크 체크 (초기화 후 약간의 지연)
+    setTimeout(() => checkInactiveBookmarks(), 5000);
+});
 
 chrome.bookmarks.onCreated.addListener(initializeBookmarkMap);
 chrome.bookmarks.onRemoved.addListener(initializeBookmarkMap);
@@ -205,6 +213,12 @@ async function recordEngagementTime(tabId, url) {
 
 // SmartMark에서는 popup.js에서 직접 처리하므로 background script는 최소화
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
+  // 90일 경과 북마크 체크 요청
+  if (message.type === 'CHECK_INACTIVE_BOOKMARKS') {
+    await checkInactiveBookmarks();
+    sendResponse({ success: true });
+    return true;
+  }
   // 필요시 여기에 background 작업 추가
   return true;
 });
@@ -823,10 +837,210 @@ async function showBookmarkNotification(searchQuery, bookmarks) {
   }
 }
 
+/**
+ * 90일 이상 방문하지 않은 북마크 찾기
+ * @returns {Promise<Array>} 90일 경과 북마크 배열
+ */
+async function findInactiveBookmarks() {
+  console.log(`[INACTIVE] 90일 경과 북마크 검사 시작...`);
+  
+  try {
+    // 방문 데이터 로드
+    const allVisitData = await chrome.storage.local.get(VISIT_DATA_KEY);
+    const visitDataMap = allVisitData[VISIT_DATA_KEY] || {};
+    
+    // 북마크 요약 정보 로드
+    const storageKey = typeof CONFIG !== 'undefined' ? CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+    const allSummaries = await chrome.storage.local.get(storageKey);
+    const summariesMap = allSummaries[storageKey] || {};
+    
+    const now = Date.now();
+    const thresholdTime = now - (DAYS_THRESHOLD * MS_PER_DAY);
+    const inactiveBookmarks = [];
+    
+    // 모든 북마크 순회
+    for (const [bookmarkId, summaryData] of Object.entries(summariesMap)) {
+      if (!summaryData || !summaryData.url) continue;
+      
+      const visitData = visitDataMap[bookmarkId];
+      const lastVisited = visitData?.lastVisited || 0;
+      
+      // 90일 경과 체크
+      if (lastVisited > 0 && lastVisited < thresholdTime) {
+        const daysSinceVisit = Math.floor((now - lastVisited) / MS_PER_DAY);
+        
+        inactiveBookmarks.push({
+          id: bookmarkId,
+          title: summaryData.title || 'Untitled',
+          url: summaryData.url,
+          folderName: summaryData.koreanFolderName || summaryData.folderName || '기타',
+          lastVisited: lastVisited,
+          daysSinceVisit: daysSinceVisit,
+          // 추가 정보: 썸네일, 요약, 태그
+          thumbnail: summaryData.thumbnail || '',
+          summary: summaryData.uiSummary || '',
+          tags: summaryData.tags || [],
+        });
+      }
+    }
+    
+    // 날짜순 정렬 (오래된 것부터)
+    inactiveBookmarks.sort((a, b) => a.lastVisited - b.lastVisited);
+    
+    console.log(`[INACTIVE] ✅ 검사 완료: ${inactiveBookmarks.length}개 북마크 발견`);
+    return inactiveBookmarks;
+    
+  } catch (error) {
+    console.error('[INACTIVE] ❌ 검사 실패:', error);
+    return [];
+  }
+}
+
+// 90일 비활성 알림을 보낸 북마크들의 lastVisited를 현재로 리셋
+async function resetInactiveBookmarks(inactiveBookmarks) {
+  try {
+    const allVisitData = await chrome.storage.local.get(VISIT_DATA_KEY);
+    const visitDataMap = allVisitData[VISIT_DATA_KEY] || {};
+    const now = Date.now();
+
+    for (const b of inactiveBookmarks) {
+      const data = visitDataMap[b.id] || {
+        frequency: 0,
+        totalTimeSpentMs: 0,
+        lastVisited: 0
+      };
+      data.lastVisited = now;
+      visitDataMap[b.id] = data;
+    }
+
+    await chrome.storage.local.set({ [VISIT_DATA_KEY]: visitDataMap });
+    console.log(`[INACTIVE] lastVisited 갱신 완료: ${inactiveBookmarks.length}개 북마크를 ${new Date(now).toISOString()}로 리셋`);
+  } catch (error) {
+    console.error('[INACTIVE] lastVisited 리셋 실패:', error);
+  }
+}
+
+/**
+ * 90일 경과 북마크 알림 표시
+ * @param {Array} inactiveBookmarks - 90일 경과 북마크 배열
+ */
+async function showInactiveBookmarkNotification(inactiveBookmarks) {
+  console.log(`[INACTIVE NOTIFICATION] 알림 생성 시작 - ${inactiveBookmarks.length}개 북마크`);
+  
+  if (inactiveBookmarks.length === 0) {
+    console.log(`[INACTIVE NOTIFICATION] 북마크가 없어 알림 생성 중단`);
+    return;
+  }
+  
+  try {
+    // 검색 결과 페이지(search-results.html)에서 재사용할 수 있도록
+    // 비활성 북마크를 검색 결과 형식으로 저장
+    lastSearchResults = {
+      query: '90일 넘게 방문하지 않은 북마크',
+      bookmarks: inactiveBookmarks.map((b) => ({
+        id: b.id,
+        title: b.title || 'Untitled',
+        url: b.url,
+        folderName: b.folderName || '기타',
+        // 원래 저장된 요약을 사용
+        summary: b.summary || '',
+        // 썸네일과 태그도 그대로 전달
+        thumbnail: b.thumbnail || '',
+        tags: b.tags || [],
+        // 비활성 북마크 전용 필드
+        daysSinceVisit: b.daysSinceVisit,
+        // 유사도/점수는 표시하지 않음
+        similarity: 0,
+        score: 0,
+      })),
+      timestamp: Date.now(),
+    };
+    console.log('[INACTIVE NOTIFICATION] 검색 결과 형식으로 lastSearchResults 저장 완료');
+
+    const notificationId = `smartmark-inactive-${Date.now()}`;
+    const count = inactiveBookmarks.length;
+    
+    // 상위 3개 북마크 제목 추출
+    const topTitles = inactiveBookmarks.slice(0, 3).map(b => b.title);
+    const titlesText = topTitles.join(', ');
+    
+    // 제목과 메시지 생성
+    const title = `90일 넘게 방문하지 않은 북마크가 ${count}개 있습니다!`;
+    let message = '';
+    
+    if (count === 1) {
+      message = `${topTitles[0]}`;
+    } else if (count <= 3) {
+      message = `${titlesText}`;
+    } else {
+      message = `${titlesText} 외 ${count - 3}개`;
+    }
+    
+    // 안전하게 처리 (길이 제한)
+    const safeMessage = message.substring(0, 100).trim();
+    
+    console.log(`[INACTIVE NOTIFICATION] - ID: ${notificationId}`);
+    console.log(`[INACTIVE NOTIFICATION] - 제목: ${title}`);
+    console.log(`[INACTIVE NOTIFICATION] - 메시지: ${safeMessage}`);
+    
+    const notificationOptions = {
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('bang.png'),
+      title: title,
+      message: safeMessage,
+      priority: 1, // 검색 알림보다 낮은 우선순위
+    };
+    
+    console.log(`[INACTIVE NOTIFICATION] Options:`, JSON.stringify(notificationOptions, null, 2));
+    
+    const createdId = await chrome.notifications.create(notificationId, notificationOptions);
+    
+    if (chrome.runtime.lastError) {
+      console.error(`[INACTIVE NOTIFICATION] ❌ runtime.lastError:`, chrome.runtime.lastError);
+    } else {
+      console.log(`[INACTIVE NOTIFICATION] ✅ 알림 생성 성공 - 반환된 ID: ${createdId}`);
+    }
+    await resetInactiveBookmarks(inactiveBookmarks);
+    
+  } catch (error) {
+    console.error(`[INACTIVE NOTIFICATION] ❌ 알림 생성 실패:`, error);
+  }
+}
+
+/**
+ * 90일 경과 북마크 체크 및 알림
+ */
+async function checkInactiveBookmarks() {
+  const now = Date.now();
+  
+  // 24시간마다 한 번만 체크
+  if (now - lastInactiveCheck < INACTIVE_CHECK_INTERVAL) {
+    console.log(`[INACTIVE] 체크 스킵 (최근 체크됨)`);
+    return;
+  }
+  
+  lastInactiveCheck = now;
+  console.log(`[INACTIVE] 90일 경과 북마크 체크 시작...`);
+  
+  const inactiveBookmarks = await findInactiveBookmarks();
+  
+  if (inactiveBookmarks.length > 0) {
+    await showInactiveBookmarkNotification(inactiveBookmarks);
+  } else {
+    console.log(`[INACTIVE] 90일 경과 북마크 없음`);
+  }
+}
+
 // 검색 처리 중복 방지를 위한 변수
 let lastSearchQuery = '';
 let lastSearchTabId = null;
 let searchProcessing = false;
+
+// 90일 경과 북마크 알림 관련 변수
+const DAYS_THRESHOLD = 0; // 90일
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const INACTIVE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24시간마다 체크
+let lastInactiveCheck = 0;
 
 /**
  * 검색 요청 감지 및 처리
@@ -904,10 +1118,20 @@ chrome.webRequest.onBeforeRequest.addListener(
 );
 
 // 알림 클릭 리스너
+// - 검색 결과 알림: 검색 결과 전용 팝업 창 열기
+// - 비활성(90일 경과) 알림: Manager 페이지 새 탭으로 열기
 chrome.notifications.onClicked.addListener((notificationId) => {
   if (notificationId.startsWith('smartmark-search-')) {
     console.log('[NOTIFICATION] 알림 클릭됨 - 검색 결과 페이지 열기');
-    // 검색 결과 페이지를 작은 창으로 열기
+    chrome.windows.create({
+      url: chrome.runtime.getURL('search-results.html'),
+      type: 'popup',
+      width: 1000,
+      height: 700,
+      focused: true
+    });
+  } else if (notificationId.startsWith('smartmark-inactive-')) {
+    console.log('[INACTIVE NOTIFICATION] 알림 클릭됨 - 비활성 북마크 결과 페이지 열기');
     chrome.windows.create({
       url: chrome.runtime.getURL('search-results.html'),
       type: 'popup',
