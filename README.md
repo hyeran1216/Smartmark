@@ -128,6 +128,7 @@ const CONFIG = {
 - **Architecture**: Service Worker (background.js) + Popup + Offscreen Document
 
 ## 📁 프로젝트 구조
+```
 smartmark/
 ├── manifest.json           # Chrome 확장 프로그램 설정
 ├── config.js               # API 키 및 설정 (gitignore)
@@ -151,3 +152,4 @@ smartmark/
     ├── tf.es2017.min.js           # TensorFlow.js
     ├── universal-sentence-encoder.min.js
     └── ort.min.js                 # ONNX Runtime
+```
