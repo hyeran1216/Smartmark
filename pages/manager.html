@@ -81,6 +81,24 @@
             line-height: 1.4;
             border-left: 3px solid #007bff;
         }
+        
+        /* 태그 스타일 */
+        .card-tags, .result-tags {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .tag {
+            display: inline-block;
+            padding: 4px 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
 
         /* 검색 기능 스타일 추가 */
         .search-section {
@@ -225,12 +243,12 @@
     <div id="bookmark-output">
         </div>
 
-    <script src="./tf.es2017.min.js"></script>
-    <script src="./universal-sentence-encoder.min.js"></script>
-    <script src="utils/tfidf.js"></script>
-    <script src="config.js"></script>
-    <script src="textEmbedder.js"></script>
-    <script src="popup.js"></script>
-    <script src="manager.js"></script>
+    <script src="../libs/tf.es2017.min.js"></script>
+    <script src="../libs/universal-sentence-encoder.min.js"></script>
+    <script src="../utils/tfidf.js"></script>
+    <script src="../config.js"></script>
+    <script src="../scripts/textEmbedder.js"></script>
+    <script src="../scripts/popup.js"></script>
+    <script src="../scripts/manager.js"></script>
 </body>
 </html>

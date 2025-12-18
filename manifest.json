@@ -4,7 +4,7 @@
     "version": "1.0",
     "description": "스마트 개인화 북마크 확장 프로그램",
     "action": {
-      "default_popup": "popup.html"
+      "default_popup": "pages/popup.html"
     },
     "permissions": [
       "activeTab",    
@@ -15,21 +15,42 @@
       "tabs",
       "webRequest",
       "offscreen",
-      "notifications"
+      "notifications",
+      "identity",
+      "alarms"
     ],
     "host_permissions": [
-        "<all_urls>"
+        "<all_urls>",
+        "https://www.googleapis.com/youtube/v3/*"
     ],
+    "oauth2": {
+      "client_id": "236457259641-uph1rkc15vl57gdj40ilf4be2ork183r.apps.googleusercontent.com",
+      "scopes": [
+        "https://www.googleapis.com/auth/youtube.force-ssl"
+      ]
+    },
     "background": {
-      "service_worker": "background.js"
+      "service_worker": "scripts/background.js"
     },
     "web_accessible_resources": [
       {
-        "resources": ["textEmbedder.js", "utils/tfidf.js"],
+        "resources": [
+          "scripts/textEmbedder.js", 
+          "utils/tfidf.js", 
+          "scripts/search-methods.js", 
+          "scripts/offscreen-bert.js", 
+          "pages/offscreen.html", 
+          "scripts/offscreen.js",
+          "libs/ort.min.js",
+          "libs/ort-wasm.wasm",
+          "libs/ort-wasm-simd.wasm",
+          "libs/ort-wasm-threaded.wasm",
+          "libs/ort-wasm-simd-threaded.wasm"
+        ],
         "matches": ["<all_urls>"]
       }
     ],
     "content_security_policy": {
-      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+      "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co https://tfhub.dev https://storage.googleapis.com https://*.googleapis.com https://*.cloudfunctions.net https://generativelanguage.googleapis.com https://api-free.deepl.com"
     }
   }

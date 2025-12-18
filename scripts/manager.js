@@ -198,6 +198,7 @@ async function loadValidBookmarksWithFolders() {
                     folderInfo: folderInfo,
                     uiSummary: summaryObject.uiSummary,      // 💡 요약 텍스트 분리
                     thumbnail: summaryObject.thumbnail,  // 💡 썸네일 URL 분리
+                    tags: summaryObject.tags || [],
                     visitData: visitData 
                 });
                 
@@ -378,6 +379,21 @@ function renderSmartBookmarksSection(bookmarks) {
         summaryElement.textContent = summaryText;
         card.appendChild(summaryElement);
 
+        // 태그 표시 (상위 3개만)
+        if (summaryObject.tags && summaryObject.tags.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.classList.add('card-tags');
+            
+            summaryObject.tags.slice(0, 3).forEach(tag => {        
+                const tagElement = document.createElement('span');
+                tagElement.classList.add('tag');
+                tagElement.textContent = tag;
+                tagsContainer.appendChild(tagElement);
+            });
+            
+            card.appendChild(tagsContainer);
+        }
+
         container.appendChild(card);
     });
     
@@ -541,6 +557,21 @@ function renderFolderGroup(folderInfo, bookmarks) {
         summaryElement.textContent = bookmark.uiSummary; 
         card.appendChild(summaryElement);
 
+        // 5. 태그 표시 (상위 3개만)
+        if (bookmark.tags && bookmark.tags.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.classList.add('card-tags');
+            
+            bookmark.tags.slice(0, 3).forEach(tag => {
+                const tagElement = document.createElement('span');
+                tagElement.classList.add('tag');
+                tagElement.textContent = tag;
+                tagsContainer.appendChild(tagElement);
+            });
+            
+            card.appendChild(tagsContainer);
+        }
+
         container.appendChild(card);
     });
     
@@ -643,8 +674,9 @@ function renderFolderSection(folderNode) {
     console.log(`[FOLDER DEBUG] 폴더 "${folderNode.title}"에서 ${bookmarks.length}개 북마크 렌더링 시작`);
     
     bookmarks.forEach(bookmark => {
-        // 로컬에 저장된 요약 정보 가져오기 (미리 로드한 데이터 사용)
-        const summaryText = bookmarkSummaries[bookmark.id] || "Gemini 요약 정보 없음";
+        // 로컬에 저장된 요약 정보 가져오기 (객체로!)
+        const summaryObject = bookmarkSummaries[bookmark.id] || { uiSummary: "Gemini 요약 정보 없음", thumbnail: "", tags: [] };
+        const summaryText = summaryObject.uiSummary || "Gemini 요약 정보 없음";
         
         console.log(`[BOOKMARK DEBUG] 북마크 렌더링: ID=${bookmark.id}, 제목="${bookmark.title}", 요약="${summaryText}"`);
         
@@ -678,6 +710,21 @@ function renderFolderSection(folderNode) {
         summaryElement.classList.add('card-summary');
         summaryElement.textContent = summaryText;
         card.appendChild(summaryElement);
+        
+        // 5. 태그 표시 (상위 3개만)
+        if (summaryObject.tags && summaryObject.tags.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.classList.add('card-tags');
+            
+            summaryObject.tags.slice(0, 3).forEach(tag => {
+                const tagElement = document.createElement('span');
+                tagElement.classList.add('tag');
+                tagElement.textContent = tag;
+                tagsContainer.appendChild(tagElement);
+            });
+            
+            card.appendChild(tagsContainer);
+        }
 
         container.appendChild(card);
     });
@@ -749,20 +796,31 @@ function displaySearchResultsInManager(results, resultsElement, statusElement) {
     
     statusElement.textContent = `${results.length}개의 결과를 찾았습니다.`;
     
-    resultsElement.innerHTML = results.map(result => `
-        <div class="result-card" onclick="window.open('${result.bookmark.url}', '_blank')">
-            <div class="result-thumbnail">
-                <img src="${result.thumbnail}" alt="thumbnail" onerror="this.src='https://www.google.com/s2/favicons?domain=${new URL(result.bookmark.url).hostname}&sz=128'; this.style.width='50px'; this.style.height='50px';">
+    resultsElement.innerHTML = results.map(result => {
+        // 태그 HTML 생성 (상위 3개만)
+        const tagsHtml = result.tags && result.tags.length > 0 
+            ? `<div class="result-tags">
+                ${result.tags.slice(0, 3).map(tag => `<span class="tag">${tag}</span>`).join('')}
+            </div>`
+            : '';
+        return `
+            <div class="result-card" onclick="window.open('${result.bookmark.url}', '_blank')">
+                <div class="result-thumbnail">
+                    <img src="${result.thumbnail}" alt="thumbnail" onerror="this.src='https://www.google.com/s2/favicons?domain=${new URL(result.bookmark.url).hostname}&sz=128'; this.style.width='50px'; this.style.height='50px';">
+                </div>
+                <div class="result-title">${result.bookmark.title}</div>
+                <div class="result-url">${result.bookmark.url}</div>
+                <div class="result-summary">${result.summary}</div>
+                ${tagsHtml}
+                <div class="result-score">${result.score}% 일치</div>
             </div>
-            <div class="result-title">${result.bookmark.title}</div>
-            <div class="result-url">${result.bookmark.url}</div>
-            <div class="result-summary">${result.summary}</div>
-            <div class="result-score">${result.score}% 일치</div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
+    const searchStartTime = Date.now(); // ⏱️ 검색 시간 측정 시작
+    
     // 1. 모든 북마크 가져오기
     const allBookmarks = await chrome.bookmarks.getTree();
     const bookmarkList = [];
@@ -795,14 +853,40 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
     if (savedModel[TFIDF_MODEL_KEY] && window.TFIDF) {
         tfidfModel = new window.TFIDF();
         tfidfModel.deserialize(savedModel[TFIDF_MODEL_KEY]);
-        console.log(`[SEARCH DEBUG] 복원된 모델 Vocab 크기: ${tfidfModel.vocabulary.size}, TotalDocs: ${tfidfModel.totalDocuments}`);
+        // 검색어 번역 (한글 → 영어)
+        let searchQueryForTfidf = searchQuery;
+        const hasKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(searchQuery);
+        
+        if (hasKorean) {
+            try {
+                const translateResponse = await fetch(window.CONFIG.DEEPL_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `DeepL-Auth-Key ${window.CONFIG.DEEPL_API_KEY}`,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        'text': searchQuery,
+                        'target_lang': 'EN-US'
+                    })
+                });
+
+                if (translateResponse.ok) {
+                    const data = await translateResponse.json();
+                    searchQueryForTfidf = data.translations[0].text;
+                    console.log(`[TF-IDF] 검색어 번역: "${searchQuery}" → "${searchQueryForTfidf}"`);
+                }
+            } catch (error) {
+                console.log('[TF-IDF] 번역 실패, 원본 사용:', error.message);
+            }
+        }
         
         // 검색어의 TF-IDF 벡터 계산
-        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQuery);
-        console.log(`[SEARCH DEBUG] 검색어 TF-IDF 벡터 생성 완료. 길이: ${queryTfIdfVector.length}`);
+        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQueryForTfidf);
+
     }
     
-    // 4. 하이브리드 스코어링
+    // 4. 하이브리드 스코어링 가중치
     const results = [];
     const ALPHA = 0.7; // 임베딩 가중치
     const BETA = 0.3;  // TF-IDF 가중치
@@ -822,54 +906,50 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
             if (tfidfModel && queryTfIdfVector && summaryData.tfidfVector) {
                 // 벡터 차원 확인 및 조정
                 if (queryTfIdfVector.length !== summaryData.tfidfVector.length) {
-                    console.warn(`[SEARCH DEBUG] "${bookmark.title}" - 벡터 차원 불일치: query=${queryTfIdfVector.length}, bookmark=${summaryData.tfidfVector.length}`);
-                    
                     // 공통 차원까지만 사용하여 계산
                     const minLength = Math.min(queryTfIdfVector.length, summaryData.tfidfVector.length);
                     const queryVec = queryTfIdfVector.slice(0, minLength);
                     const bookmarkVec = summaryData.tfidfVector.slice(0, minLength);
-                    
                     keywordScore = tfidfModel.cosineSimilarity(queryVec, bookmarkVec);
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 차원 조정 후 TF-IDF 계산: ${minLength}차원 사용, keywordScore=${keywordScore.toFixed(4)}`);
                 } else {
                     keywordScore = tfidfModel.cosineSimilarity(
                         queryTfIdfVector,
                         summaryData.tfidfVector
                     );
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 계산: keywordScore=${keywordScore.toFixed(4)}`);
-                }
-            } else {
-                // 왜 Keyword 점수가 0인지 명확히 로그
-                if (!tfidfModel) {
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 모델 없음`);
-                } else if (!queryTfIdfVector) {
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 검색어 TF-IDF 벡터 없음`);
-                } else if (!summaryData.tfidfVector) {
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 북마크 TF-IDF 벡터 없음 (구버전 북마크일 수 있음)`);
                 }
             }
             
-            // 최종 점수: α * Semantic + β * Keyword
-            const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
+            // BERT 점수 (manager.js에서는 BERT 임베딩 생성 안 함 - 백그라운드에서만)
+            let bertScore = 0;
+            // Note: manager.js에서는 실시간 BERT 임베딩 생성하지 않음 (시간이 너무 오래 걸림)
             
-            // 디버그 정보 출력
-            console.log(`[SEARCH DEBUG] "${bookmark.title}" - Semantic: ${(semanticScore * 100).toFixed(1)}%, Keyword: ${(keywordScore * 100).toFixed(1)}%, Final: ${(finalScore * 100).toFixed(1)}%`);
+            // 최종 점수: α * USE + β * TF-IDF + γ * BERT
+            const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
             
             results.push({
                 bookmark: bookmark,
                 summary: summaryData.uiSummary || 'No summary information',
                 thumbnail: summaryData.thumbnail || '',
+                tags: summaryData.tags || [],
                 similarity: finalScore,
                 semanticScore: semanticScore,
                 keywordScore: keywordScore,
+                bertScore: bertScore,
                 score: Math.round(finalScore * 100)
             });
         }
     }
     
     // 5. 유사도 순으로 정렬하고 상위 10개만 반환
-    return results
+    const finalResults = results
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, 10)
         .filter(result => result.similarity > 0.2); // 최소 유사도 20%로 설정 (popup.js와 동일)
+    
+    // ⏱️ 검색 시간 출력
+    const searchEndTime = Date.now();
+    const searchDuration = ((searchEndTime - searchStartTime) / 1000).toFixed(2);
+    console.log(`⏱️ [MANAGER] 총 검색 시간: ${searchDuration}초`);
+    
+    return finalResults;
 }
