@@ -84,7 +84,7 @@
             white-space: nowrap;
         }
 
-        body { width: 300px; padding: 15px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { width: 300px; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         label { display: block; margin-top: 10px; font-weight: 600; color: #333; }
         input[type="text"], select { width: 100%; padding: 8px; box-sizing: border-box; margin-top: 5px; border: 1px solid #ddd; border-radius: 4px; }
         #favIcon { width: 16px; height: 16px; margin-right: 5px; vertical-align: middle; }
@@ -110,8 +110,8 @@
 
         <div id="status" style="color: green; margin: 15px 0;">save bookmark...</div>
 
-        <button id="saveButton">save</button>
-        <button id="manageButton">manage</button>
+        <button id="saveButton" style="width: 48%;">save</button>
+        <button id="manageButton" style="width: 48%;">manage</button>
     </div>
     <div id="search-mode" style="display:none;">
         <div id="search-container">
@@ -122,11 +122,11 @@
         <div id="results-output"></div>
     </div>
     
-    <script src="./tf.es2017.min.js"></script>
-    <script src="./universal-sentence-encoder.min.js"></script>
-    <script src="utils/tfidf.js"></script>
-    <script src="config.js"></script>
-    <script src="textEmbedder.js"></script>
-    <script src="popup.js"></script>
+    <script src="../libs/tf.es2017.min.js"></script>
+    <script src="../libs/universal-sentence-encoder.min.js"></script>
+    <script src="../utils/tfidf.js"></script>
+    <script src="../config.js"></script>
+    <script src="../scripts/textEmbedder.js"></script>
+    <script src="../scripts/popup.js"></script>
 </body>
 </html>

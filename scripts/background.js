@@ -1,8 +1,8 @@
 // SmartMark Background Script
 // Multi-model Search System
 
-importScripts('config.js');
-importScripts('utils/tfidf.js');
+importScripts('../config.js');
+importScripts('../utils/tfidf.js');
 importScripts('search-methods.js');
 
 const VISIT_DATA_KEY = 'SmartMarkVisitData';
@@ -14,17 +14,155 @@ let activeTabStartTime = 0; // 현재 탭이 활성화된 시점의 타임스탬
 let bookmarkUrls = {};      // 북마크 ID를 URL로 매핑한 맵
 let tfidfModel = null;
 
-// 확장 프로그램 설치/업데이트/시작 시 북마크 URL 맵을 로드
-chrome.runtime.onInstalled.addListener(async () => {
+async function initialize() {
     await initializeBookmarkMap();
-    // 90일 경과 북마크 체크 (초기화 후 약간의 지연)
     setTimeout(() => checkInactiveBookmarks(), 5000);
-});
-chrome.runtime.onStartup.addListener(async () => {
-    await initializeBookmarkMap();
-    // 90일 경과 북마크 체크 (초기화 후 약간의 지연)
-    setTimeout(() => checkInactiveBookmarks(), 5000);
-});
+}
+
+/**
+ * 백그라운드에서 북마크 임베딩 처리 (비동기)
+ */
+async function processBookmarkEmbeddingsBackground(data) {
+    console.log(`[BG EMBED] 백그라운드 임베딩 처리 시작: ${data.title}`);
+    const startTime = Date.now();
+    
+    try {
+        // Offscreen document 준비
+        await setupOffscreenDocument();
+        
+        const metadata = {
+            url: data.url,
+            title: data.englishTitle,
+            details: data.englishSummary,
+            fullContent: data.englishKeySnippet,
+            category: data.englishFolderName,
+            dateAdded: data.dateAdded,
+            id: data.bookmarkId,
+        };
+        
+        // 1. USE 임베딩 생성
+        console.log('[BG EMBED] USE 임베딩 생성 중...');
+        const useEmbedding = await generateEmbedding(
+            `${metadata.title}. ${metadata.fullContent}. ${metadata.details}. ${metadata.category}`
+        );
+        
+        // 2. TF-IDF 벡터 생성
+        console.log('[BG EMBED] TF-IDF 벡터 생성 중...');
+        let tfidfVector = null;
+        const savedModel = await chrome.storage.local.get(TFIDF_MODEL_KEY);
+        if (savedModel[TFIDF_MODEL_KEY] && typeof TFIDF !== 'undefined') {
+            const tfidfModelInstance = new TFIDF();
+            tfidfModelInstance.deserialize(savedModel[TFIDF_MODEL_KEY]);
+            const combined = `${metadata.title} ${metadata.fullContent} ${metadata.details} ${metadata.category}`;
+            tfidfVector = tfidfModelInstance.computeTFIDFVector(combined);
+        }
+        
+        // 3. BERT 임베딩 및 키워드 추출
+        console.log('[BG EMBED] BERT 통합 처리 중...');
+        let bertEmbedding = null;
+        let tags = [];
+        
+        try {
+            const fullText = `${data.englishTitle}. ${data.englishSummary}. ${data.englishKeySnippet}`;
+            const bertResponse = await chrome.runtime.sendMessage({
+                type: 'BERT_FULL_PROCESS',
+                text: fullText
+            });
+            
+            if (bertResponse?.success) {
+                bertEmbedding = bertResponse.embedding;
+                tags = bertResponse.tags || []; 
+                console.log(`[BG EMBED] BERT 완료: 키워드 ${tags.length}개`);
+            }
+        } catch (error) {
+            console.log('[BG EMBED] BERT 실패 (무시):', error.message);
+        }
+        
+        // 4. 저장
+        console.log('[BG EMBED] 스토리지 저장 중...');
+        const storageKey = CONFIG.STORAGE_KEY;
+        const allSummaries = await chrome.storage.local.get(storageKey);
+        const summariesMap = allSummaries[storageKey] || {};
+        
+        summariesMap[data.bookmarkId] = {
+            id: data.bookmarkId,
+            title: data.title,
+            englishTitle: data.englishTitle,
+            url: data.url,
+            summary: data.englishSummary,
+            keySnippet: data.englishKeySnippet,
+            uiSummary: data.uiSummary,
+            folderName: data.englishFolderName,
+            koreanFolderName: data.folderName,
+            thumbnail: data.thumbnailUrl,
+            embedding: useEmbedding,
+            tfidfVector: tfidfVector,
+            bertEmbedding: bertEmbedding,
+            tags: tags,
+            dateAdded: data.dateAdded
+        };
+        
+        await chrome.storage.local.set({ [storageKey]: summariesMap });
+        
+        // 5. TF-IDF 모델 재구축 (백그라운드)
+        console.log('[BG EMBED] TF-IDF 모델 재구축 중...');
+        await rebuildTfIdfModelBackground();
+        
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`[BG EMBED] ✅ 백그라운드 처리 완료 (${elapsed}초)`);
+        
+    } catch (error) {
+        console.error('[BG EMBED] 백그라운드 처리 실패:', error);
+    }
+}
+
+/**
+ * TF-IDF 모델 재구축 (백그라운드용)
+ */
+async function rebuildTfIdfModelBackground() {
+    try {
+        const storageKey = CONFIG.STORAGE_KEY;
+        const allSummaries = await chrome.storage.local.get(storageKey);
+        const summariesMap = allSummaries[storageKey] || {};
+        
+        // 1. 모든 문서 텍스트 수집
+        const documents = [];
+        for (const [bookmarkId, summaryData] of Object.entries(summariesMap)) {
+            if (summaryData) {
+                const docText = [
+                    summaryData.englishTitle || summaryData.title || '',
+                    summaryData.summary || '',
+                    summaryData.keySnippet || '',
+                    summaryData.folderName || ''
+                ].filter(text => text && text.trim() !== '').join(' ');
+                
+                if (docText.trim()) {
+                    documents.push(docText);
+                }
+            }
+        }
+        
+        if (documents.length === 0 || typeof TFIDF === 'undefined') {
+            console.warn('[BG TFIDF] 문서나 TFIDF 클래스가 없어 재구축 건너뜀.');
+            return;
+        }
+        
+        // 2. 새 TF-IDF 모델 구축
+        const tfidfModel = new TFIDF();
+        tfidfModel.buildVocabulary(documents);
+        
+        // 3. 모델 저장
+        const serialized = tfidfModel.serialize();
+        await chrome.storage.local.set({ [TFIDF_MODEL_KEY]: serialized });
+        
+        console.log(`[BG TFIDF] 모델 재구축 완료: ${Object.keys(summariesMap).length}개 문서`);
+    } catch (error) {
+        console.error('[BG TFIDF] 재구축 실패:', error);
+    }
+}
+
+chrome.runtime.onInstalled.addListener(initialize);
+chrome.runtime.onStartup.addListener(initialize);
 
 chrome.bookmarks.onCreated.addListener(initializeBookmarkMap);
 chrome.bookmarks.onRemoved.addListener(initializeBookmarkMap);
@@ -219,7 +357,16 @@ chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
     sendResponse({ success: true });
     return true;
   }
-  // 필요시 여기에 background 작업 추가
+  
+  // 북마크 임베딩 백그라운드 처리
+  if (message.type === 'PROCESS_BOOKMARK_EMBEDDINGS') {
+    processBookmarkEmbeddingsBackground(message).catch(err => {
+      console.error('[BG] 백그라운드 임베딩 처리 실패:', err);
+    });
+    sendResponse({ success: true, message: 'Background processing started' });
+    return true;
+  }
+  
   return true;
 });
 
@@ -343,7 +490,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
   if (info.menuItemId === "smartmark-manage") {
     chrome.tabs.create({
-      url: chrome.runtime.getURL("manager.html"),
+      url: chrome.runtime.getURL("pages/manager.html"),
     });
   }
 });
@@ -374,7 +521,7 @@ async function setupOffscreenDocument() {
 
   try {
     await chrome.offscreen.createDocument({
-      url: 'offscreen.html',
+      url: 'pages/offscreen.html',
       reasons: ['WORKERS'],
       justification: 'WebGL을 사용한 임베딩 생성',
     });
@@ -649,7 +796,39 @@ async function findSimilarBookmarks(queryEmbedding, searchQuery, threshold = 0.3
     console.log(`[DEBUG] TF-IDF 모델 로드 성공`);
     const tfidfModelInstance = new TFIDF();
     tfidfModelInstance.deserialize(savedModel[TFIDF_MODEL_KEY]);
-    queryTfIdfVector = tfidfModelInstance.computeTFIDFVector(searchQuery);
+    
+    // 검색어 번역 (한글 → 영어)
+    let searchQueryForTfidf = searchQuery;
+    const hasKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(searchQuery);
+    
+    if (hasKorean) {
+      try {
+        console.log(`[TF-IDF] 한글 검색어 감지, 번역 시도: "${searchQuery}"`);
+        const translateResponse = await fetch(CONFIG.DEEPL_API_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': `DeepL-Auth-Key ${CONFIG.DEEPL_API_KEY}`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            'text': searchQuery,
+            'target_lang': 'EN-US'
+          })
+        });
+
+        if (translateResponse.ok) {
+          const data = await translateResponse.json();
+          searchQueryForTfidf = data.translations[0].text;
+          console.log(`[TF-IDF] 검색어 번역 완료: "${searchQuery}" → "${searchQueryForTfidf}"`);
+        } else {
+          console.warn(`[TF-IDF] 번역 API 실패 (${translateResponse.status}), 원본 사용`);
+        }
+      } catch (error) {
+        console.warn('[TF-IDF] 번역 오류, 원본 사용:', error.message);
+      }
+    }
+    
+    queryTfIdfVector = tfidfModelInstance.computeTFIDFVector(searchQueryForTfidf);
     console.log(`[DEBUG] TF-IDF 검색어 벡터 생성 완료 (차원: ${queryTfIdfVector.length})`);
     
     // 하이브리드 스코어링 가중치
@@ -1037,7 +1216,7 @@ let lastSearchTabId = null;
 let searchProcessing = false;
 
 // 90일 경과 북마크 알림 관련 변수
-const DAYS_THRESHOLD = 0; // 90일
+const DAYS_THRESHOLD = 90; // 90일
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const INACTIVE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24시간마다 체크
 let lastInactiveCheck = 0;
@@ -1124,7 +1303,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   if (notificationId.startsWith('smartmark-search-')) {
     console.log('[NOTIFICATION] 알림 클릭됨 - 검색 결과 페이지 열기');
     chrome.windows.create({
-      url: chrome.runtime.getURL('search-results.html'),
+      url: chrome.runtime.getURL('pages/search-results.html'),
       type: 'popup',
       width: 1000,
       height: 700,
@@ -1133,7 +1312,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   } else if (notificationId.startsWith('smartmark-inactive-')) {
     console.log('[INACTIVE NOTIFICATION] 알림 클릭됨 - 비활성 북마크 결과 페이지 열기');
     chrome.windows.create({
-      url: chrome.runtime.getURL('search-results.html'),
+      url: chrome.runtime.getURL('pages/search-results.html'),
       type: 'popup',
       width: 1000,
       height: 700,

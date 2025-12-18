@@ -121,6 +121,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         handleNGramExtraction(message.text, sendResponse);
         return true;
     }
+    
+    // 텍스트 번역 (DeepL)
+    if (message.type === 'TRANSLATE_TEXT') {
+        handleTranslation(message.text, message.targetLang, sendResponse);
+        return true;
+    }
+    
+    // BERT 통합 처리 (임베딩 + 키워드 추출)
+    if (message.type === 'BERT_FULL_PROCESS') {
+        handleBERTFullProcess(message.text, sendResponse);
+        return true;
+    }
 
     // 모델 준비 상태 확인
     if (message.type === 'CHECK_READY') {
@@ -262,6 +274,111 @@ async function handleNGramExtraction(text, sendResponse) {
         });
     } catch (error) {
         console.error('[N-gram] 추출 실패:', error);
+        sendResponse({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+}
+
+/**
+ * DeepL 번역
+ */
+async function handleTranslation(text, targetLang, sendResponse) {
+    try {
+        const deeplLang = targetLang === 'en' ? 'EN-US' : targetLang.toUpperCase();
+        
+        const response = await fetch(CONFIG.DEEPL_API_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': `DeepL-Auth-Key ${CONFIG.DEEPL_API_KEY}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                'text': text,
+                'target_lang': deeplLang
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`DeepL API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log(`[TRANSLATE] 번역 완료: "${text.substring(0, 50)}..." → "${data.translations[0].text.substring(0, 50)}..."`);
+        
+        sendResponse({ 
+            success: true, 
+            translatedText: data.translations[0].text 
+        });
+    } catch (error) {
+        console.error('[TRANSLATE] 번역 실패:', error);
+        sendResponse({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+}
+
+/**
+ * BERT 통합 처리 (임베딩 + 키워드 추출)
+ */
+async function handleBERTFullProcess(text, sendResponse) {
+    if (!window.bertEmbedder) {
+        sendResponse({ success: false, error: 'BERT embedder not loaded' });
+        return;
+    }
+
+    try {
+        console.log('[BERT FULL] 통합 처리 시작');
+        const startTime = performance.now();
+        
+        // 1. 문서 임베딩 생성 (1번만)
+        const docEmbedding = await window.bertEmbedder.embed(text);
+        console.log(`[BERT FULL] 문서 임베딩 완료 (${(performance.now() - startTime).toFixed(0)}ms)`);
+        
+        // 2. N-gram 추출 (BERT 사용 안 함)
+        const ngrams = window.bertEmbedder.extractNGrams(text);
+        console.log(`[BERT FULL] N-gram ${ngrams.length}개 추출`);
+        
+        // 3. 키워드 추출 (문서 임베딩 재사용)
+        const candidates = ngrams.slice(0, 30);
+        const keywordResults = [];
+        
+        for (const candidate of candidates) {
+            const candEmbedding = await window.bertEmbedder.embed(candidate);
+            
+            // 코사인 유사도 계산
+            let dotProduct = 0;
+            let normA = 0;
+            let normB = 0;
+            
+            for (let i = 0; i < docEmbedding.length; i++) {
+                dotProduct += docEmbedding[i] * candEmbedding[i];
+                normA += docEmbedding[i] * docEmbedding[i];
+                normB += candEmbedding[i] * candEmbedding[i];
+            }
+            
+            const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+            keywordResults.push({ keyword: candidate, score: similarity });
+        }
+        
+        // 상위 5개 키워드 선택
+        const topKeywords = keywordResults
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5)
+            .map(k => k.keyword);
+        
+        const totalTime = (performance.now() - startTime).toFixed(0);
+        console.log(`[BERT FULL] ✅ 완료 (${totalTime}ms): 키워드 ${topKeywords.length}개`);
+        
+        sendResponse({ 
+            success: true, 
+            embedding: docEmbedding,
+            tags: topKeywords
+        });
+    } catch (error) {
+        console.error('[BERT FULL] 실패:', error);
         sendResponse({ 
             success: false, 
             error: error.message 

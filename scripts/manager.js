@@ -384,7 +384,7 @@ function renderSmartBookmarksSection(bookmarks) {
             const tagsContainer = document.createElement('div');
             tagsContainer.classList.add('card-tags');
             
-            summaryObject.tags.slice(0, 3).forEach(tag => {
+            summaryObject.tags.slice(0, 3).forEach(tag => {        
                 const tagElement = document.createElement('span');
                 tagElement.classList.add('tag');
                 tagElement.textContent = tag;

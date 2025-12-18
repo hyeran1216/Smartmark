@@ -63,7 +63,7 @@ async function initializeBERT() {
         console.log('[BERT] 사용 가능한 백엔드:', ortRuntime.env.backends);
         
         // WASM 경로 설정
-        const wasmPath = chrome.runtime.getURL('');
+        const wasmPath = chrome.runtime.getURL('libs/');
         console.log('[BERT] WASM 경로 설정:', wasmPath);
         ortRuntime.env.wasm.wasmPaths = wasmPath;
         ortRuntime.env.wasm.numThreads = 1; // 단일 스레드 (안정성)

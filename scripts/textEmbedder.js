@@ -260,38 +260,33 @@ class TextEmbedder {
 async _translateText(text, targetLang = 'en') {
   if (text.trim() === "") return "";
   
-  // API 키 및 URL은 외부 CONFIG에서 가져온다고 가정
-  const apiKey = window.CONFIG.GEMINI_API_KEY ; 
-  const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+  const apiKey = window.CONFIG.DEEPL_API_KEY;
+  const apiUrl = window.CONFIG.DEEPL_API_URL;
+  const deeplLang = targetLang === 'en' ? 'EN-US' : targetLang.toUpperCase();
 
   try {
-      const response = await fetch(url, {
+      const response = await fetch(apiUrl, {
           method: 'POST',
           headers: {
-              'Content-Type': 'application/json',
+              'Authorization': `DeepL-Auth-Key ${apiKey}`,
+              'Content-Type': 'application/x-www-form-urlencoded',
           },
-          // source=ko (한국어)를 명시하거나, detectLanguage를 사용할 수 있으나, 
-          // 여기서는 USE의 성능을 위해 target=en만 확실히 명시
-          body: JSON.stringify({
-              q: text,
-              target: targetLang, 
-              format: 'text',
-          }),
+          body: new URLSearchParams({
+              'text': text,
+              'target_lang': deeplLang
+          })
       });
 
       if (!response.ok) {
-          console.error("Google Translate API 호출 실패:", response.status, response.statusText);
-          // 실패 시 원본 텍스트를 반환하여 임베딩이 완전히 중단되는 것을 방지
-          return text; 
+          console.error("DeepL API 호출 실패:", response.status, response.statusText);
+          return text;
       }
 
       const data = await response.json();
-      // 번역된 텍스트 반환
-      return data.data.translations[0].translatedText.trim();
+      return data.translations[0].text.trim();
       
   } catch (error) {
-      console.error("번역 서비스 오류 발생:", error);
-      // 오류 발생 시 원본 텍스트 반환
+      console.error("DeepL 번역 오류:", error);
       return text;
   }
 }
