@@ -770,13 +770,14 @@ function cosineSimilarity(vecA, vecB) {
 }
 
 /**
- * 검색어와 유사한 북마크 찾기 (하이브리드: 임베딩 + TF-IDF)
+ * 검색어와 유사한 북마크 찾기
  * @param {number[]} queryEmbedding - 검색어 임베딩
  * @param {string} searchQuery - 원본 검색어 (TF-IDF용)
  * @param {number} threshold - 유사도 임계값 (기본값: 0.3)
  * @returns {Promise<Array>} 유사한 북마크 배열
  */
 async function findSimilarBookmarks(queryEmbedding, searchQuery, threshold = 0.3) {
+  const searchStartTime = Date.now(); // ⏱️ 검색 시간 측정 시작
   console.log(`[DEBUG] findSimilarBookmarks 시작 - 검색어: "${searchQuery}", 임계값: ${threshold}`);
   
   const storageKey = CONFIG.STORAGE_KEY;
@@ -831,10 +832,27 @@ async function findSimilarBookmarks(queryEmbedding, searchQuery, threshold = 0.3
     queryTfIdfVector = tfidfModelInstance.computeTFIDFVector(searchQueryForTfidf);
     console.log(`[DEBUG] TF-IDF 검색어 벡터 생성 완료 (차원: ${queryTfIdfVector.length})`);
     
+    // BERT 임베딩 생성
+    let queryBertEmbedding = null;
+    try {
+      await setupOffscreenDocument();
+      const bertResponse = await chrome.runtime.sendMessage({
+        type: 'BERT_FULL_PROCESS',
+        text: searchQueryForTfidf  // 번역된 검색어 사용
+      });
+      
+      if (bertResponse?.success) {
+        queryBertEmbedding = bertResponse.embedding;
+        console.log(`[BERT] 검색어 임베딩 생성 완료 (${queryBertEmbedding.length}차원)`);
+      }
+    } catch (error) {
+      console.warn('[BERT] 임베딩 생성 실패, USE+TF-IDF만 사용:', error.message);
+    }
+    
     // 하이브리드 스코어링 가중치
-    const ALPHA = 0.4; // 임베딩 가중치
-    const BETA = 0.6;  // TF-IDF 가중치
-    console.log(`[DEBUG] 가중치 - Semantic: ${ALPHA}, Keyword: ${BETA}`);
+    const ALPHA = 0.3;  // USE 임베딩 가중치
+    const BETA = 0.3;   // TF-IDF 가중치
+    const GAMMA = 0.4;  // BERT 가중치
 
     for (const [bookmarkId, summaryData] of Object.entries(summariesMap)) {
       if (summaryData && summaryData.embedding) {
@@ -851,13 +869,20 @@ async function findSimilarBookmarks(queryEmbedding, searchQuery, threshold = 0.3
             keywordScore = tfidfModelInstance.cosineSimilarity(queryTfIdfVector, summaryData.tfidfVector);
           }
         }
+
+        // BERT 점수 계산
+        let bertScore = 0;
+        if (summaryData.bertEmbedding && queryBertEmbedding) {
+          bertScore = cosineSimilarity(queryBertEmbedding, summaryData.bertEmbedding);
+        }
         
-        const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
+        const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore) + (GAMMA * bertScore);
         
         allScores.push({
           title: summaryData.title || 'Untitled',
           semantic: semanticScore,
           keyword: keywordScore,
+          bert: bertScore,
           final: finalScore
         });
         
@@ -914,10 +939,15 @@ async function findSimilarBookmarks(queryEmbedding, searchQuery, threshold = 0.3
   allScores.slice(0, 20).forEach((score, idx) => {
     const emoji = score.final >= threshold ? '✅' : '❌';
     console.log(`${emoji} ${idx + 1}. [${(score.final * 100).toFixed(1)}%] ${score.title}`);
-    console.log(`   Semantic: ${(score.semantic * 100).toFixed(1)}% | Keyword: ${(score.keyword * 100).toFixed(1)}%`);
+    console.log(`   USE: ${(score.semantic * 100).toFixed(1)}% | TF-IDF: ${(score.keyword * 100).toFixed(1)}% | BERT: ${(score.bert * 100).toFixed(1)}%`);
   });
   console.log(`\n✅ 임계값 이상: ${similarBookmarks.length}개`);
   console.log(`❌ 임계값 미만: ${allScores.length - similarBookmarks.length}개`);
+  
+  // ⏱️ 검색 시간 출력
+  const searchEndTime = Date.now();
+  const searchDuration = ((searchEndTime - searchStartTime) / 1000).toFixed(2);
+  console.log(`⏱️ 총 검색 시간: ${searchDuration}초`);
   console.log(`==========================================\n`);
   
   const result = similarBookmarks.slice(0, 10);

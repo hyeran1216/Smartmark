@@ -635,6 +635,8 @@ async function saveSummaryAndThumbnailWithEmbedding(bookmarkId, title, englishSu
  * 검색 버튼 클릭 핸들러
  */
 async function handleSearch() {
+    const searchStartTime = Date.now(); // ⏱️ 검색 시간 측정 시작
+    
     const searchQuery = document.getElementById('searchInput').value.trim();
     const statusElement = document.getElementById('search-status');
     const resultsElement = document.getElementById('results-output');
@@ -673,6 +675,10 @@ async function handleSearch() {
         // 4. 결과 표시
         displaySearchResults(searchResults, resultsElement, statusElement);
         
+        // ⏱️ 전체 검색 시간 출력 (UI 렌더링 포함)
+        const totalSearchTime = ((Date.now() - searchStartTime) / 1000).toFixed(2);
+        console.log(`⏱️ [POPUP] 전체 검색 완료 시간 (UI 포함): ${totalSearchTime}초`);
+        
     } catch (error) {
         console.error('[SEARCH ERROR]', error);
         statusElement.textContent = `검색 실패: ${error.message}`;
@@ -683,6 +689,8 @@ async function handleSearch() {
  * 임베딩을 사용하여 북마크 검색
  */
 async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
+    const searchStartTime = Date.now(); // ⏱️ 검색 시간 측정 시작
+    
     // 1. 모든 북마크 가져오기
     const allBookmarks = await chrome.bookmarks.getTree();
     const bookmarkList = [];
@@ -700,7 +708,6 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
     }
     
     flattenBookmarks(allBookmarks);
-    console.log(`[SEARCH DEBUG] 총 ${bookmarkList.length}개 북마크 발견`);
     
     // 2. 저장된 임베딩 정보 가져오기
     const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
@@ -716,13 +723,39 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
     if (savedModel[TFIDF_MODEL_KEY] && window.TFIDF) {
         tfidfModel = new window.TFIDF();
         tfidfModel.deserialize(savedModel[TFIDF_MODEL_KEY]);
-        console.log(`[SEARCH DEBUG] 복원된 모델 Vocab 크기: ${tfidfModel.vocabulary.size}, TotalDocs: ${tfidfModel.totalDocuments}`);
+        // 검색어 번역 (한글 → 영어)
+        let searchQueryForTfidf = searchQuery;
+        const hasKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(searchQuery);
+        
+        if (hasKorean) {
+            try {
+                const translateResponse = await fetch(window.CONFIG.DEEPL_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `DeepL-Auth-Key ${window.CONFIG.DEEPL_API_KEY}`,
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        'text': searchQuery,
+                        'target_lang': 'EN-US'
+                    })
+                });
+
+                if (translateResponse.ok) {
+                    const data = await translateResponse.json();
+                    searchQueryForTfidf = data.translations[0].text;
+                    console.log(`[TF-IDF] 검색어 번역: "${searchQuery}" → "${searchQueryForTfidf}"`);
+                }
+            } catch (error) {
+                console.log('[TF-IDF] 번역 실패, 원본 사용:', error.message);
+            }
+        }
         
         // 검색어의 TF-IDF 벡터 계산
-        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQuery);
+        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQueryForTfidf);
     }
     
-    // 4. 하이브리드 스코어링
+    // 4. 하이브리드 스코어링 가중치
     const results = [];
     const ALPHA = 0.7; // 임베딩 가중치
     const BETA = 0.3;  // TF-IDF 가중치
@@ -740,31 +773,32 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
             // Keyword 점수 (TF-IDF 기반 코사인 유사도)
             let keywordScore = 0;
             if (tfidfModel && queryTfIdfVector && summaryData.tfidfVector) {
-                // 벡터 차원 확인
+                // 벡터 차원 확인 및 조정
                 if (queryTfIdfVector.length !== summaryData.tfidfVector.length) {
-                    console.warn(`[SEARCH DEBUG] "${bookmark.title}" - 벡터 차원 불일치: query=${queryTfIdfVector.length}, bookmark=${summaryData.tfidfVector.length}`);
+                    // 공통 차원까지만 사용하여 계산
+                    const minLength = Math.min(queryTfIdfVector.length, summaryData.tfidfVector.length);
+                    const queryVec = queryTfIdfVector.slice(0, minLength);
+                    const bookmarkVec = summaryData.tfidfVector.slice(0, minLength);
+                    keywordScore = tfidfModel.cosineSimilarity(queryVec, bookmarkVec);
                 } else {
                     keywordScore = tfidfModel.cosineSimilarity(
                         queryTfIdfVector,
                         summaryData.tfidfVector
                     );
                 }
-            } else {
-                // 왜 Keyword 점수가 0인지 명확히 로그
-                if (!tfidfModel) {
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - TF-IDF 모델 없음`);
-                } else if (!queryTfIdfVector) {
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 검색어 TF-IDF 벡터 없음`);
-                } else if (!summaryData.tfidfVector) {
-                    console.log(`[SEARCH DEBUG] "${bookmark.title}" - 북마크 TF-IDF 벡터 없음 (구버전 북마크일 수 있음)`);
-                }
             }
             
-            // 최종 점수: α * Semantic + β * Keyword
+            // BERT 점수 (popup.js에서는 BERT 임베딩 생성 안 함 - 백그라운드에서만)
+            let bertScore = 0;
+            // Note: popup.js에서는 실시간 BERT 임베딩 생성하지 않음 (시간이 너무 오래 걸림)
+            
+            // 최종 점수: α * USE + β * TF-IDF + γ * BERT
             const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
             
-            // 디버그 정보 출력
-            console.log(`[SEARCH DEBUG] "${bookmark.title}" - Semantic: ${(semanticScore * 100).toFixed(1)}%, Keyword: ${(keywordScore * 100).toFixed(1)}%, Final: ${(finalScore * 100).toFixed(1)}%`);
+            // 디버그 정보 출력 (상위 10개만)
+            if (results.length < 10 || finalScore > 0.3) {
+                console.log(`[SEARCH DEBUG] "${bookmark.title}" - USE: ${(semanticScore * 100).toFixed(1)}%, TF-IDF: ${(keywordScore * 100).toFixed(1)}%, BERT: ${(bertScore * 100).toFixed(1)}%, Final: ${(finalScore * 100).toFixed(1)}%`);
+            }
             
             results.push({
                 bookmark: bookmark,
@@ -774,16 +808,24 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
                 similarity: finalScore,
                 semanticScore: semanticScore,
                 keywordScore: keywordScore,
+                bertScore: bertScore,
                 score: Math.round(finalScore * 100)
             });
         }
     }
     
     // 4. 유사도 순으로 정렬하고 상위 10개만 반환
-    return results
+    const finalResults = results
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, 10)
         .filter(result => result.similarity > 0.2); // 최소 유사도 20%로 상향 조정
+    
+    // ⏱️ 검색 시간 출력
+    const searchEndTime = Date.now();
+    const searchDuration = ((searchEndTime - searchStartTime) / 1000).toFixed(2);
+    console.log(`⏱️ [POPUP] 총 검색 시간: ${searchDuration}초`);
+    
+    return finalResults;
 }
 
 /**
