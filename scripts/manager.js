@@ -776,6 +776,46 @@ async function handleSearchInManager() {
         
         // Manager 페이지에 맞게 결과 표시
         displaySearchResultsInManager(searchResults, resultsElement, statusElement);
+
+        const backButton = document.createElement('button');
+        backButton.innerHTML = '← Back';  // 또는 '🔙' 이모지
+        backButton.style.cssText = `
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            padding: 8px 16px;
+            background-color: rgba(108, 117, 125, 0.9);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 1000;
+            transition: all 0.2s ease;
+        `;
+        backButton.onmouseover = () => {
+            backButton.style.backgroundColor = 'rgba(90, 98, 104, 0.95)';
+            backButton.style.transform = 'scale(1.05)';
+        };
+        backButton.onmouseout = () => {
+            backButton.style.backgroundColor = 'rgba(108, 117, 125, 0.9)';
+            backButton.style.transform = 'scale(1)';
+        };
+        backButton.addEventListener('click', () => {
+            bookmarkOutput.style.display = 'block';
+            resultsElement.innerHTML = '';
+            statusElement.textContent = '';
+            document.getElementById('searchInput').value = '';
+            backButton.remove();  // 버튼 제거
+        });
+        
+        // body에 추가 (고정 위치)
+        document.body.appendChild(backButton);
+        
+        // Manager 페이지에 맞게 결과 표시
+        displaySearchResultsInManager(searchResults, resultsElement, statusElement);
         
     } catch (error) {
         console.error('[SEARCH ERROR]', error);
@@ -804,7 +844,7 @@ function displaySearchResultsInManager(results, resultsElement, statusElement) {
             </div>`
             : '';
         return `
-            <div class="result-card" onclick="window.open('${result.bookmark.url}', '_blank')">
+            <div class="result-card" data-url="${result.bookmark.url}">
                 <div class="result-thumbnail">
                     <img src="${result.thumbnail}" alt="thumbnail" onerror="this.src='https://www.google.com/s2/favicons?domain=${new URL(result.bookmark.url).hostname}&sz=128'; this.style.width='50px'; this.style.height='50px';">
                 </div>
@@ -816,6 +856,13 @@ function displaySearchResultsInManager(results, resultsElement, statusElement) {
             </div>
         `;
     }).join('');
+    // 카드 클릭 이벤트 리스너 추가
+    document.querySelectorAll('.result-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const url = card.getAttribute('data-url');
+            chrome.tabs.create({ url: url });
+        });
+    });
 }
 
 async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {

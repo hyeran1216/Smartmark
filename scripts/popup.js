@@ -150,57 +150,145 @@ async function handleSave() {
     const saveStartTime = Date.now();
     
     try {
+        // 요약 캐싱을 위한 변수
+        let reuseExistingSummary = false;
+        let existingSummaryData = null;
+        
         const existingBookmark = await findExistingBookmarkByUrl(currentUrl);
         if (existingBookmark) {
-            const shouldReplace = confirm(`이미 같은 URL의 북마크가 있습니다:\n"${existingBookmark.title}"\n\n기존 북마크를 새로운 요약으로 업데이트하시겠습니까?`);
-            if (shouldReplace) {
+            // 기존 요약 정보 조회
+            const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+            const allSummaries = await chrome.storage.local.get(storageKey);
+            const summariesMap = allSummaries[storageKey] || {};
+            existingSummaryData = summariesMap[existingBookmark.id];
+            
+            if (existingSummaryData && existingSummaryData.summary) {
+                // 요약이 있는 경우 - 재사용 옵션 제공
+                const shouldReuse = confirm(
+                    `이미 같은 URL의 북마크가 있습니다:\n"${existingBookmark.title}"\n\n` +
+                    `기존 요약을 재사용하시겠습니까?\n` +
+                    `(확인: 재사용하여 빠르게 저장 | 취소: 새로 요약 생성)`
+                );
+                
+                if (shouldReuse) {
+                    reuseExistingSummary = true;
+                    console.log('[캐싱] 기존 요약 재사용 선택 - Gemini 호출 생략');
+                }
+                
+                // 기존 북마크 삭제 (재사용 여부와 관계없이)
                 await chrome.bookmarks.remove(existingBookmark.id);
-                await removeSummaryFromLocal(existingBookmark.id);
             } else {
-                document.getElementById('status').textContent = '저장이 취소되었습니다.';
-                return;
+                // 요약이 없는 경우 - 기존 로직
+                const shouldReplace = confirm(
+                    `이미 같은 URL의 북마크가 있습니다:\n"${existingBookmark.title}"\n\n` +
+                    `기존 북마크를 새로운 요약으로 업데이트하시겠습니까?`
+                );
+                if (shouldReplace) {
+                    await chrome.bookmarks.remove(existingBookmark.id);
+                    await removeSummaryFromLocal(existingBookmark.id);
+                } else {
+                    document.getElementById('status').textContent = '저장이 취소되었습니다.';
+                    return;
+                }
             }
         }
         
         let content = "";
 
-        if (isYouTubeUrl(currentUrl)) {
-            const videoId = extractYouTubeVideoId(currentUrl);
-            if (videoId) {
-                document.getElementById('status').textContent = 'YouTube 자막 추출 중...';
-                try {
-                    content = await getYouTubeCaptionText(videoId);
-                    if (!content) {
-                        document.getElementById('status').textContent = 'YouTube 자막을 찾을 수 없습니다. 일반 페이지로 처리합니다.';
+        // 요약을 재사용하지 않는 경우에만 콘텐츠 추출
+        if (!reuseExistingSummary) {
+            if (isYouTubeUrl(currentUrl)) {
+                const videoId = extractYouTubeVideoId(currentUrl);
+                if (videoId) {
+                    document.getElementById('status').textContent = 'YouTube 자막 추출 중...';
+                    try {
+                        content = await getYouTubeCaptionText(videoId);
+                        if (!content) {
+                            document.getElementById('status').textContent = 'YouTube 자막을 찾을 수 없습니다. 일반 페이지로 처리합니다.';
+                            content = await getPageContentForSummary();
+                        }
+                    } catch (error) {
+                        console.error('YouTube 자막 추출 실패:', error);
+                        document.getElementById('status').textContent = 'YouTube 자막 추출 실패. 일반 페이지로 처리합니다.';
                         content = await getPageContentForSummary();
                     }
-                } catch (error) {
-                    console.error('YouTube 자막 추출 실패:', error);
-                    document.getElementById('status').textContent = 'YouTube 자막 추출 실패. 일반 페이지로 처리합니다.';
+                } else {
                     content = await getPageContentForSummary();
                 }
             } else {
                 content = await getPageContentForSummary();
             }
-        } else {
-            content = await getPageContentForSummary();
         }
 
         let summary = "No summary information";
         let englishSummary = "No summary information";
         let englishKeySnippet = "No key snippet";
+        let result;
 
-        // 병렬 처리: 썸네일, 북마크 저장, 폴더명 조회 동시 시작
+        // 병렬 처리: 요약, 북마크 저장, 폴더명 조회 동시 시작 (썸네일 제외)
         document.getElementById('status').textContent = '요약 및 북마크 저장 중...';
 
         const step1Start = Date.now();
-        const [result, thumbnailUrl, newBookmark, folderName] = await Promise.all([
+        
+        if (reuseExistingSummary && existingSummaryData) {
+            // 기존 요약 재사용 - Gemini 호출 생략!
+            result = {
+                summary: existingSummaryData.summary,
+                keySnippet: existingSummaryData.keySnippet
+            };
+            
+            const [newBookmark, folderName] = await Promise.all([
+                saveBookmark(title, currentUrl, selectedFolderId),
+                getFolderNameById(selectedFolderId)
+            ]);
+            console.log(`⏱️ [단계1 - 캐싱] 북마크 저장만: ${((Date.now() - step1Start) / 1000).toFixed(2)}초 (Gemini 생략)`);
+            
+            englishSummary = result.summary;
+            englishKeySnippet = result.keySnippet;
+            
+            // 기존 데이터 병합 (폴더명과 제목은 업데이트)
+            const [englishTitleForEmbedding, englishFolderName, uiSummary] = await Promise.all([
+                window.textEmbedder._translateText(title, 'en'),
+                window.textEmbedder._translateText(folderName, 'en'),
+                window.textEmbedder._translateText(englishSummary, window.CONFIG.TARGET_LANGUAGE)
+            ]);
+            
+            const saveEndTime = Date.now();
+            const elapsedSeconds = ((saveEndTime - saveStartTime) / 1000).toFixed(2);
+            console.log(`⏱️ [캐싱] 요약 재사용 완료 시간: ${elapsedSeconds}초`);
+            
+            document.getElementById('status').textContent = `saved! summary: "${uiSummary}"`;
+            
+            // 백그라운드에서 임베딩 및 썸네일 작업 처리 (비동기)
+            chrome.runtime.sendMessage({
+                type: 'PROCESS_BOOKMARK_EMBEDDINGS',
+                bookmarkId: newBookmark.id,
+                title: title,
+                englishTitle: englishTitleForEmbedding,
+                englishSummary: englishSummary,
+                englishKeySnippet: englishKeySnippet,
+                englishFolderName: englishFolderName,
+                folderName: folderName,
+                uiSummary: uiSummary,
+                thumbnailUrl: existingSummaryData.thumbnail || null,
+                needsThumbnail: !existingSummaryData.thumbnail,
+                url: newBookmark.url || currentUrl,
+                dateAdded: newBookmark.dateAdded || Date.now()
+            }).catch(err => {
+                console.warn('백그라운드 처리 요청 실패 (무시):', err);
+            });
+            
+            return; // 여기서 종료
+        }
+        
+        // 새로 요약 생성
+        const [summaryResult, newBookmark, folderName] = await Promise.all([
             content ? summarizePageContent(content) : Promise.resolve({ summary: "No summary information", keySnippet: "No key snippet" }),
-            getThumbnailUrl(currentUrl),
             saveBookmark(title, currentUrl, selectedFolderId),
             getFolderNameById(selectedFolderId)
         ]);
-        console.log(`⏱️ [단계1] Gemini+썸네일+북마크: ${((Date.now() - step1Start) / 1000).toFixed(2)}초`);
+        result = summaryResult;
+        console.log(`⏱️ [단계1] Gemini+북마크: ${((Date.now() - step1Start) / 1000).toFixed(2)}초`);
 
         englishSummary = result.summary;
         englishKeySnippet = result.keySnippet;
@@ -221,7 +309,7 @@ async function handleSave() {
         
         document.getElementById('status').textContent = `saved! summary: "${uiSummary}"`;
         
-        // 백그라운드에서 임베딩 및 나머지 작업 처리 (비동기)
+        // 백그라운드에서 임베딩 및 썸네일 작업 처리 (비동기)
         chrome.runtime.sendMessage({
             type: 'PROCESS_BOOKMARK_EMBEDDINGS',
             bookmarkId: newBookmark.id,
@@ -232,7 +320,8 @@ async function handleSave() {
             englishFolderName: englishFolderName,
             folderName: folderName,
             uiSummary: uiSummary,
-            thumbnailUrl: thumbnailUrl,
+            thumbnailUrl: null,  // 백그라운드에서 생성
+            needsThumbnail: true,  // 썸네일 생성 필요 플래그
             url: newBookmark.url || currentUrl,
             dateAdded: newBookmark.dateAdded || Date.now()
         }).catch(err => {
@@ -353,11 +442,10 @@ async function summarizePageContent(content) {
         throw new Error("Gemini API 키가 설정되지 않았습니다. config.js 파일을 확인해주세요.");
     }
     
-    // 번역 제거 - Gemini는 다국어 지원
+    // Content 길이 단축: 10000 → 5000
     let contentToAnalyze = content;
-
-    if (content.length > 10000) {
-        contentToAnalyze = content.substring(0, 10000);
+    if (content.length > 5000) {
+        contentToAnalyze = content.substring(0, 5000);
     }
 
     // API 호출을 위한 프롬프트 (다국어 입력, 영어 출력)
@@ -375,12 +463,25 @@ async function summarizePageContent(content) {
     
     Text to analyze: "${contentToAnalyze}"`;
 
+    // 타임아웃 헬퍼 함수
+    function fetchWithTimeout(url, options, timeout = 15000) {
+        return Promise.race([
+            fetch(url, options),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Request timeout')), timeout)
+            )
+        ]);
+    }
+
     // 재시도 함수
     async function tryGemini(model, retryCount = 0) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${window.CONFIG.GEMINI_API_KEY}`;
         
         try {
-            const response = await fetch(url, {
+            const startTime = Date.now();
+            
+            // 15초 타임아웃 적용
+            const response = await fetchWithTimeout(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -390,23 +491,26 @@ async function summarizePageContent(content) {
                         parts: [{ text: prompt }]
                     }],
                     generationConfig: { 
-                        temperature: 0.1 
+                        temperature: 0.1,
+                        maxOutputTokens: 200  // 출력 제한 (빠른 응답)
                     }
                 })
-            });
+            }, 15000);  // 15초 타임아웃
+
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+            console.log(`⏱️ [Gemini ${model}] 응답 시간: ${elapsed}초`);
 
             // 503 에러 처리
             if (response.status === 503) {
-                if (retryCount < 2) {
-                    console.warn(`[Gemini] 503 에러, 2초 후 재시도... (${retryCount + 1}/2)`);
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                if (retryCount < 1) {  // 재시도 1회로 축소
+                    console.warn(`[Gemini] 503 에러, 1초 후 재시도...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                     return tryGemini(model, retryCount + 1);
-                } else if (model === 'gemini-2.5-flash') {
-                    // 모델 변경
-                    console.warn('[Gemini] gemini-2.0-flash-exp로 변경 시도');
-                    return tryGemini('gemini-2.0-flash-exp', 0);
+                } else {
+                    // 바로 1.5-flash로 전환
+                    console.warn('[Gemini] gemini-1.5-flash로 변경 시도');
+                    return tryGemini('gemini-1.5-flash', 0);
                 }
-                throw new Error('Gemini API 503: 서비스 일시적 불가');
             }
 
             if (!response.ok) {
@@ -428,7 +532,7 @@ async function summarizePageContent(content) {
                     summary: jsonResponse.summary?.trim() || "Summary failed",
                     keySnippet: jsonResponse.keySnippet?.trim() || "No refined content found"
                 };
-            } catch (e) {  // parseError → e
+            } catch (e) {
                 console.error("Gemini Response JSON Parsing Failed:", e, "Raw Text:", rawText);
                 return { 
                     summary: "Summary parsing failed", 
@@ -438,13 +542,20 @@ async function summarizePageContent(content) {
             
         } catch (error) {
             console.error("Gemini Summarization API Error:", error);
+            
+            // 타임아웃 에러면 1.5-flash로 재시도
+            if (error.message === 'Request timeout' && model === 'gemini-2.0-flash-exp') {
+                console.warn('[Gemini] 타임아웃 발생, gemini-1.5-flash로 재시도');
+                return tryGemini('gemini-1.5-flash', 0);
+            }
+            
             return { 
                 summary: "Summarization service error", 
                 keySnippet: "Summarization service error" 
             };
         }
     }
-    return tryGemini(window.CONFIG?.GEMINI_MODEL || 'gemini-2.5-flash');
+    return tryGemini(window.CONFIG?.GEMINI_MODEL || 'gemini-2.0-flash-exp');
 }
 /**
  * 콘텐츠 스크립트를 통해 현재 탭의 텍스트 내용을 요청합니다.
@@ -849,7 +960,7 @@ function displaySearchResults(results, resultsElement, statusElement) {
             : '';
         
         return `
-            <div class="result-card">
+            <div class="result-card" data-url="${result.bookmark.url}" style="cursor: pointer;">
                 <div class="result-thumbnail"><img src="${result.thumbnail}" alt="thumbnail"></div>
                 <div class="result-title" onclick="openBookmark('${result.bookmark.url}')">${result.bookmark.title}</div>
                 <div class="result-url">${result.bookmark.url}</div>
@@ -859,6 +970,15 @@ function displaySearchResults(results, resultsElement, statusElement) {
             </div>
         `;
     }).join('');
+
+    // 카드 클릭 이벤트 리스너 추가
+    document.querySelectorAll('.result-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const url = card.getAttribute('data-url');
+            chrome.tabs.create({ url: url });
+            window.close();
+        });
+    });
 }
 
 /**

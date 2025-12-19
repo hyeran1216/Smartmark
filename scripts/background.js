@@ -20,6 +20,87 @@ async function initialize() {
 }
 
 /**
+ * YouTube URL 확인
+ */
+function isYouTubeUrl(url) {
+    return /youtube\.com|youtu\.be/.test(url);
+}
+
+/**
+ * YouTube 비디오 ID 추출
+ */
+function extractYouTubeVideoId(url) {
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+        /youtube\.com\/watch\?.*v=([^&\n?#]+)/
+    ];
+    
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+            return match[1];
+        }
+    }
+    return null;
+}
+
+/**
+ * 썸네일 URL 생성 (타임아웃 포함)
+ */
+async function getThumbnailUrl(url) {
+    // YouTube URL인 경우 YouTube 공식 썸네일 URL 사용
+    if (isYouTubeUrl(url)) {
+        const videoId = extractYouTubeVideoId(url);
+        if (videoId) {
+            const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/sddefault.jpg`;
+            console.log(`[BG 썸네일] YouTube 썸네일 URL 생성: ${thumbnailUrl}`);
+            return thumbnailUrl;
+        } else {
+            console.warn('[BG 썸네일] video ID를 추출할 수 없어 기본 썸네일 사용');
+            return 'placeholder_url';
+        }
+    }
+    
+    // 일반 웹페이지인 경우 Cloud Function 호출
+    if (!CONFIG || !CONFIG.THUMBNAIL_API_URL || CONFIG.THUMBNAIL_API_URL.includes('YOUR_THUMBNAIL_API_URL_HERE')) {
+         console.warn("[BG 썸네일] 썸네일 API URL이 설정되지 않았습니다. 플레이스홀더를 사용합니다.");
+         return 'placeholder_url';
+    }
+    
+    try {
+        const startTime = Date.now();
+        
+        // 10초 타임아웃 적용
+        const response = await Promise.race([
+            fetch(CONFIG.THUMBNAIL_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ targetUrl: url })
+            }),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Thumbnail timeout')), 10000)
+            )
+        ]);
+        
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`⏱️ [BG 썸네일] 응답 시간: ${elapsed}초`);
+        
+        if (!response.ok) {
+            console.warn(`[BG 썸네일] API 호출 실패: ${response.status}`);
+            return 'placeholder_url';
+        }
+        
+        const data = await response.json();
+        return data.thumbnail_url || 'placeholder_url';
+    } catch (error) {
+        console.error('[BG 썸네일] API 호출 중 오류:', error.message);
+        return 'placeholder_url';
+    }
+}
+
+/**
  * 백그라운드에서 북마크 임베딩 처리 (비동기)
  */
 async function processBookmarkEmbeddingsBackground(data) {
@@ -29,6 +110,16 @@ async function processBookmarkEmbeddingsBackground(data) {
     try {
         // Offscreen document 준비
         await setupOffscreenDocument();
+        
+        // 썸네일 생성 (필요한 경우)
+        let thumbnailUrl = data.thumbnailUrl;
+        if (data.needsThumbnail && !thumbnailUrl) {
+            console.log('[BG EMBED] 썸네일 생성 중...');
+            const thumbStart = Date.now();
+            thumbnailUrl = await getThumbnailUrl(data.url);
+            const thumbElapsed = ((Date.now() - thumbStart) / 1000).toFixed(2);
+            console.log(`⏱️ [BG 썸네일] 생성 완료 (${thumbElapsed}초)`);
+        }
         
         const metadata = {
             url: data.url,
@@ -94,7 +185,7 @@ async function processBookmarkEmbeddingsBackground(data) {
             uiSummary: data.uiSummary,
             folderName: data.englishFolderName,
             koreanFolderName: data.folderName,
-            thumbnail: data.thumbnailUrl,
+            thumbnail: thumbnailUrl,
             embedding: useEmbedding,
             tfidfVector: tfidfVector,
             bertEmbedding: bertEmbedding,
