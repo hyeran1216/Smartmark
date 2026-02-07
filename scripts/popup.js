@@ -1,4 +1,19 @@
-document.addEventListener('DOMContentLoaded', main);
+import { aiManager } from '../utils/ai-manager.js';
+import { getStorageKey } from '../utils/storage.js';
+import { cosineSimilarity } from '../utils/math.js';
+import { openBookmark as openBookmarkUrl } from '../utils/navigation.js';
+import {
+    isYouTubeUrl,
+    extractYouTubeVideoId,
+    getYouTubeCaptionText,
+    extractYouTubeCaptionFromPage,
+} from '../utils/youtube.js';
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', main);
+} else {
+    main();
+}
 
 let currentUrl = '';
 let currentTitle = '';
@@ -13,30 +28,29 @@ async function main() {
         await getCurrentTabInfo();
         updateUiWithCurrentTab();
         await populateFolderSelect();
-        
+
         document.getElementById('saveButton').addEventListener('click', handleSave);
         document.getElementById('manageButton').addEventListener('click', () => {
             chrome.tabs.create({ url: chrome.runtime.getURL("pages/manager.html") });
             window.close();
         });
-        document.getElementById('status').textContent = '저장할 정보를 확인해주세요.';
+        document.getElementById('status').textContent = 'Please check the information to save.';
 
         saveModeButton.addEventListener('click', () => switchMode('save'));
         searchModeButton.addEventListener('click', () => switchMode('search'));
-        
+
         document.getElementById('searchButton').addEventListener('click', handleSearch);
         document.getElementById('searchInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') handleSearch();
         });
     } catch (error) {
-        console.error("초기화 중 오류 발생:", error);
-        document.getElementById('status').textContent = `오류: ${error.message}`;
+        document.getElementById('status').textContent = `Error: ${error.message}`;
     }
 }
 
 function switchMode(mode) {
     if (mode === currentMode) return;
-    
+
     currentMode = mode;
     if (mode === 'save') {
         saveModeDiv.style.display = 'block';
@@ -51,19 +65,15 @@ function switchMode(mode) {
     }
 }
 
-/**
- * //현재 활성화된 탭의 URL과 제목을 가져와 전역 변수에 저장합니다.
- */
+/** 현재 활성화된 탭의 URL과 제목을 가져와 전역 변수에 저장합니다. */
 async function getCurrentTabInfo() {
-    // activeTab 권한을 통해 현재 활성화된 탭의 정보를 쿼리합니다.
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    
+
     if (tabs && tabs.length > 0) {
         const tab = tabs[0];
         currentUrl = tab.url;
         currentTitle = tab.title;
-        
-        // 파비콘 처리
+
         const favIconUrl = tab.favIconUrl || '';
         const favIconElement = document.getElementById('favIcon');
         if (favIconUrl) {
@@ -73,143 +83,119 @@ async function getCurrentTabInfo() {
             favIconElement.style.display = 'none';
         }
     } else {
-        throw new Error("활성화된 탭 정보를 찾을 수 없습니다.");
+        throw new Error("No active tab");
     }
 }
-/**
- * //획득한 정보로 UI 입력 필드를 업데이트합니다.
- */
+/** 획득한 정보로 UI 입력 필드를 업데이트합니다. */
 function updateUiWithCurrentTab() {
     document.getElementById('titleInput').value = currentTitle;
     document.getElementById('urlInput').value = currentUrl;
 }
-/**
- * //북마크 트리를 순회하며 폴더 목록을 드롭다운에 채웁니다.
- */
+/** 북마크 트리를 순회하며 폴더 목록을 드롭다운에 채웁니다. */
 async function populateFolderSelect() {
     const folderSelect = document.getElementById('folderSelect');
-    folderSelect.innerHTML = ''; // 초기 옵션 제거
-    
-    // 북마크 트리 전체를 가져옵니다.
+    folderSelect.innerHTML = '';
+
     const bookmarks = await chrome.bookmarks.getTree();
-    
-    // 루트 노드(ID: 0)의 자식부터 탐색을 시작합니다.
+
     if (bookmarks.length > 0 && bookmarks[0].children) {
         traverseBookmarks(bookmarks[0], folderSelect, 0);
     }
-    
-    // 폴더가 하나도 없을 경우 기본 옵션을 추가합니다.
+
     if (folderSelect.options.length === 0) {
         const option = document.createElement('option');
-        option.value = '1'; // '기타 북마크' 폴더 ID (크롬 기본값)
-        option.textContent = '북마크 폴더 없음 (기타 북마크에 저장)';
+        option.value = '1';
+        option.textContent = 'No bookmarks found (save to Other bookmarks)';
         folderSelect.appendChild(option);
     }
 }
 
-/**
- * 재귀적으로 북마크 트리를 탐색하여 폴더만 드롭다운에 추가합니다.
- * @param {object} node 현재 북마크 노드
- * @param {HTMLElement} selectElement <select> 요소
- * @param {number} level 현재 깊이 (들여쓰기용)
- */
+/** 재귀적으로 북마크 트리를 탐색하여 폴더만 드롭다운에 추가합니다. */
 function traverseBookmarks(node, selectElement, level) {
-    // 폴더인 경우 (URL이 없고 children이 있음)
     if (node.children) {
-        // 루트 노드(ID: 0)와 '북마크 바' (ID: 1), '기타 북마크' (ID: 2) 등 크롬 기본 폴더도 포함하여 option을 만듭니다.
-        if (node.id !== '0') { 
+        if (node.id !== '0') {
             const prefix = '— '.repeat(level - 1 > 0 ? level - 1 : 0);
             const option = document.createElement('option');
             option.value = node.id;
             option.textContent = prefix + node.title;
             selectElement.appendChild(option);
         }
-        
-        // 자식 노드를 순회합니다.
+
         for (const child of node.children) {
-            // 자식 노드가 폴더일 경우에만 재귀 호출 (북마크 항목은 건너뜀)
             if (child.children) {
-                 traverseBookmarks(child, selectElement, level + 1);
+                traverseBookmarks(child, selectElement, level + 1);
             }
         }
     }
-}/**
- * //북마크 저장 버튼 클릭 핸들러 (다음 단계에서 실제 로직이 됩니다.)
- */
+}
+/** 저장 버튼 클릭 처리 */
 async function handleSave() {
     const title = document.getElementById('titleInput').value;
     const selectedFolderId = document.getElementById('folderSelect').value;
-    
+
     if (!selectedFolderId) {
-        alert("저장할 폴더를 선택해야 합니다.");
+        alert("Please select a folder to save.");
         return;
     }
 
-    document.getElementById('status').textContent = '페이지 분석 및 요약 생성 중...';
+    document.getElementById('status').textContent = 'Analyzing page and generating summary...';
 
-    const saveStartTime = Date.now();
-    
     try {
-        // 요약 캐싱을 위한 변수
         let reuseExistingSummary = false;
         let existingSummaryData = null;
-        
+
         const existingBookmark = await findExistingBookmarkByUrl(currentUrl);
         if (existingBookmark) {
-            // 기존 요약 정보 조회
-            const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+            const storageKey = getStorageKey();
             const allSummaries = await chrome.storage.local.get(storageKey);
             const summariesMap = allSummaries[storageKey] || {};
             existingSummaryData = summariesMap[existingBookmark.id];
-            
+
             if (existingSummaryData && existingSummaryData.summary) {
-                // 요약이 있는 경우 - 재사용 옵션 제공
                 const shouldReuse = confirm(
-                    `이미 같은 URL의 북마크가 있습니다:\n"${existingBookmark.title}"\n\n` +
-                    `기존 요약을 재사용하시겠습니까?\n` +
-                    `(확인: 재사용하여 빠르게 저장 | 취소: 새로 요약 생성)`
+                    `Bookmark with this URL already exists:\n"${existingBookmark.title}"\n\n` +
+                    `Reuse existing summary?\n` +
+                    `(OK: Reuse | Cancel: Generate New)`
                 );
-                
+
                 if (shouldReuse) {
                     reuseExistingSummary = true;
-                    console.log('[캐싱] 기존 요약 재사용 선택 - Gemini 호출 생략');
                 }
-                
-                // 기존 북마크 삭제 (재사용 여부와 관계없이)
+
                 await chrome.bookmarks.remove(existingBookmark.id);
             } else {
-                // 요약이 없는 경우 - 기존 로직
                 const shouldReplace = confirm(
-                    `이미 같은 URL의 북마크가 있습니다:\n"${existingBookmark.title}"\n\n` +
-                    `기존 북마크를 새로운 요약으로 업데이트하시겠습니까?`
+                    `Bookmark with this URL already exists:\n"${existingBookmark.title}"\n\n` +
+                    `Update with new summary?`
                 );
                 if (shouldReplace) {
                     await chrome.bookmarks.remove(existingBookmark.id);
                     await removeSummaryFromLocal(existingBookmark.id);
                 } else {
-                    document.getElementById('status').textContent = '저장이 취소되었습니다.';
+                    document.getElementById('status').textContent = 'Save cancelled.';
                     return;
                 }
             }
         }
-        
+
         let content = "";
 
-        // 요약을 재사용하지 않는 경우에만 콘텐츠 추출
         if (!reuseExistingSummary) {
             if (isYouTubeUrl(currentUrl)) {
                 const videoId = extractYouTubeVideoId(currentUrl);
                 if (videoId) {
-                    document.getElementById('status').textContent = 'YouTube 자막 추출 중...';
+                    document.getElementById('status').textContent = 'Extracting YouTube transcript...';
                     try {
                         content = await getYouTubeCaptionText(videoId);
                         if (!content) {
-                            document.getElementById('status').textContent = 'YouTube 자막을 찾을 수 없습니다. 일반 페이지로 처리합니다.';
-                            content = await getPageContentForSummary();
+                            throw new Error("Transcript empty");
                         }
-                    } catch (error) {
-                        console.error('YouTube 자막 추출 실패:', error);
-                        document.getElementById('status').textContent = 'YouTube 자막 추출 실패. 일반 페이지로 처리합니다.';
+                    }
+                    catch (error) {
+                        document.getElementById('status').textContent = 'YouTube transcript failed: Please open the transcript panel.';
+
+                        await new Promise(resolve => setTimeout(resolve, 2500));
+
                         content = await getPageContentForSummary();
                     }
                 } else {
@@ -225,591 +211,302 @@ async function handleSave() {
         let englishKeySnippet = "No key snippet";
         let result;
 
-        // 병렬 처리: 요약, 북마크 저장, 폴더명 조회 동시 시작 (썸네일 제외)
-        document.getElementById('status').textContent = '요약 및 북마크 저장 중...';
+        document.getElementById('status').textContent = 'Saving summary and bookmark...';
 
-        const step1Start = Date.now();
-        
         if (reuseExistingSummary && existingSummaryData) {
-            // 기존 요약 재사용 - Gemini 호출 생략!
             result = {
                 summary: existingSummaryData.summary,
                 keySnippet: existingSummaryData.keySnippet
             };
-            
+
             const [newBookmark, folderName] = await Promise.all([
                 saveBookmark(title, currentUrl, selectedFolderId),
                 getFolderNameById(selectedFolderId)
             ]);
-            console.log(`⏱️ [단계1 - 캐싱] 북마크 저장만: ${((Date.now() - step1Start) / 1000).toFixed(2)}초 (Gemini 생략)`);
-            
-            englishSummary = result.summary;
-            englishKeySnippet = result.keySnippet;
-            
-            // 기존 데이터 병합 (폴더명과 제목은 업데이트)
-            const [englishTitleForEmbedding, englishFolderName, uiSummary] = await Promise.all([
-                window.textEmbedder._translateText(title, 'en'),
-                window.textEmbedder._translateText(folderName, 'en'),
-                window.textEmbedder._translateText(englishSummary, window.CONFIG.TARGET_LANGUAGE)
-            ]);
-            
-            const saveEndTime = Date.now();
-            const elapsedSeconds = ((saveEndTime - saveStartTime) / 1000).toFixed(2);
-            console.log(`⏱️ [캐싱] 요약 재사용 완료 시간: ${elapsedSeconds}초`);
-            
-            document.getElementById('status').textContent = `saved! summary: "${uiSummary}"`;
-            
-            // 백그라운드에서 임베딩 및 썸네일 작업 처리 (비동기)
+
+            document.getElementById('status').textContent = `Saved! Summary: "${result.summary}"`;
+
             chrome.runtime.sendMessage({
                 type: 'PROCESS_BOOKMARK_EMBEDDINGS',
                 bookmarkId: newBookmark.id,
                 title: title,
-                englishTitle: englishTitleForEmbedding,
-                englishSummary: englishSummary,
-                englishKeySnippet: englishKeySnippet,
-                englishFolderName: englishFolderName,
+                summary: result.summary,
+                keySnippet: result.keySnippet,
                 folderName: folderName,
-                uiSummary: uiSummary,
                 thumbnailUrl: existingSummaryData.thumbnail || null,
                 needsThumbnail: !existingSummaryData.thumbnail,
                 url: newBookmark.url || currentUrl,
                 dateAdded: newBookmark.dateAdded || Date.now()
-            }).catch(err => {
-                console.warn('백그라운드 처리 요청 실패 (무시):', err);
-            });
-            
-            return; // 여기서 종료
+            }).catch(() => { });
+
+            window.close();
+            return;
         }
-        
-        // 새로 요약 생성
-        const [summaryResult, newBookmark, folderName] = await Promise.all([
-            content ? summarizePageContent(content) : Promise.resolve({ summary: "No summary information", keySnippet: "No key snippet" }),
+
+        const [newBookmark, folderName] = await Promise.all([
             saveBookmark(title, currentUrl, selectedFolderId),
             getFolderNameById(selectedFolderId)
         ]);
-        result = summaryResult;
-        console.log(`⏱️ [단계1] Gemini+북마크: ${((Date.now() - step1Start) / 1000).toFixed(2)}초`);
 
-        englishSummary = result.summary;
-        englishKeySnippet = result.keySnippet;
-        
-        // 번역도 병렬 처리
-        const step2Start = Date.now();
-        const [englishTitleForEmbedding, englishFolderName, uiSummary] = await Promise.all([
-            window.textEmbedder._translateText(title, 'en'),
-            window.textEmbedder._translateText(folderName, 'en'),
-            window.textEmbedder._translateText(englishSummary, window.CONFIG.TARGET_LANGUAGE)
-        ]);
-        console.log(`⏱️ [단계2] 3개 번역: ${((Date.now() - step2Start) / 1000).toFixed(2)}초`);
-        
-        // 요약까지만 보여주고 나머지는 백그라운드에서 처리
-        const saveEndTime = Date.now();
-        const elapsedSeconds = ((saveEndTime - saveStartTime) / 1000).toFixed(2);
-        console.log(`⏱️ 요약 완료 시간: ${elapsedSeconds}초`);
-        
-        document.getElementById('status').textContent = `saved! summary: "${uiSummary}"`;
-        
-        // 백그라운드에서 임베딩 및 썸네일 작업 처리 (비동기)
-        chrome.runtime.sendMessage({
-            type: 'PROCESS_BOOKMARK_EMBEDDINGS',
-            bookmarkId: newBookmark.id,
-            title: title,
-            englishTitle: englishTitleForEmbedding,
-            englishSummary: englishSummary,
-            englishKeySnippet: englishKeySnippet,
-            englishFolderName: englishFolderName,
-            folderName: folderName,
-            uiSummary: uiSummary,
-            thumbnailUrl: null,  // 백그라운드에서 생성
-            needsThumbnail: true,  // 썸네일 생성 필요 플래그
-            url: newBookmark.url || currentUrl,
-            dateAdded: newBookmark.dateAdded || Date.now()
-        }).catch(err => {
-            console.warn('백그라운드 처리 요청 실패 (무시):', err);
-        });
-        
+        let thumbnailUrl = null;
+        try {
+            if (isYouTubeUrl(currentUrl)) {
+                const videoId = extractYouTubeVideoId(currentUrl);
+                if (videoId) thumbnailUrl = `https://img.youtube.com/vi/${videoId}/sddefault.jpg`;
+            } else {
+                thumbnailUrl = await captureTabThumbnail();
+            }
+        } catch (e) { }
 
+        let summaryResult = "No summary available";
+        let uiSummaryResult = "No summary available";
+        let aiSuccess = false;
+
+        document.getElementById('status').textContent = 'Generating summary...';
+
+        try {
+            const isYouTube = isYouTubeUrl(currentUrl);
+
+            summaryResult = await aiManager.summarize(content, {
+                type: 'tldr',
+                format: 'plain-text',
+                length: 'short',
+                outputLanguage: 'en',
+                forceCloud: isYouTube
+            });
+
+            // Translate summary for UI
+            // try {
+            //     const targetLang = window.CONFIG?.TARGET_LANGUAGE || 'ko';
+            //     document.getElementById('status').textContent = 'Translating summary...';
+            //     const translatedSummary = await aiManager.translate(summaryResult, targetLang);
+            //     uiSummaryResult = translatedSummary;
+            // } catch (tError) {
+            //     console.warn('Translation failed, using original summary:', tError);
+            //     uiSummaryResult = summaryResult;
+            // }
+            uiSummaryResult = summaryResult;
+
+            document.getElementById('status').innerText = `Success!`;
+            aiSuccess = true;
+        } catch (aiError) {
+            summaryResult = "Summary failed: check on-device AI or API key";
+            uiSummaryResult = "Summary failed";
+            document.getElementById('status').innerText = summaryResult;
+            aiSuccess = false;
+        }
+
+        try {
+            await saveInitialMetadata(newBookmark.id, {
+                title: title,
+                url: newBookmark.url || currentUrl,
+                folderName: folderName,
+                summary: summaryResult,
+                uiSummary: uiSummaryResult,
+                thumbnail: thumbnailUrl,
+                dateAdded: newBookmark.dateAdded || Date.now()
+            });
+
+            if (aiSuccess) {
+                chrome.runtime.sendMessage({
+                    type: 'PROCESS_BOOKMARK_EMBEDDINGS',
+                    bookmarkId: newBookmark.id,
+                    title: title,
+                    summary: summaryResult,
+                    keySnippet: summaryResult,
+                    uiSummary: uiSummaryResult,
+                    folderName: folderName,
+                    thumbnailUrl: thumbnailUrl,
+                    needsThumbnail: !thumbnailUrl,
+                    url: newBookmark.url || currentUrl,
+                    dateAdded: newBookmark.dateAdded || Date.now()
+                }).catch(() => { });
+
+                document.getElementById('status').innerText = 'Success! (Background processing...)';
+
+                setTimeout(() => {
+                    window.close();
+                }, 700);
+            }
+
+        } catch (saveError) {
+            document.getElementById('status').textContent = 'Save Failed!';
+        }
+
+        return;
 
     } catch (error) {
-        console.error("북마크 저장 중 오류 발생:", error);
-        document.getElementById('status').textContent = `저장 실패: ${error.message}`;
-        alert("저장 실패. Gemini API 키와 권한을 확인해주세요.");
+        document.getElementById('status').textContent = `Save failed: ${error.message}`;
+        alert("Save failed. Please check Gemini API Key and permissions.");
     }
 }
 
-/**
- * TF-IDF 모델 재구축 (새 북마크 추가 시)
- */
-async function rebuildTfIdfModel() {
-    console.log('[TF-IDF REBUILD] 모델 재구축 및 벡터 갱신 시작...');
-    
-    // popup.js는 브라우저 환경이므로 window.CONFIG 사용
-    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
-    
-    try {
-        const allSummaries = await chrome.storage.local.get(storageKey);
-        const summariesMap = allSummaries[storageKey] || {};
-        
-        const documents = [];
-        const bookmarkIds = Object.keys(summariesMap);
-        
-        // 1. 모든 북마크의 텍스트 수집
-        for (const bookmarkId of bookmarkIds) {
-            const summaryData = summariesMap[bookmarkId];
-            if (summaryData) {
-                // 저장 로직과 동일하게 텍스트를 결합
-                const docText = [
-                    summaryData.title || '',
-                    summaryData.englishSummary || '',
-                    summaryData.englishKeySnippet || '',
-                    summaryData.englishFolderName || ''
-                ].filter(text => text.trim() !== '').join(' ');
-                
-                if (docText.trim()) {
-                    documents.push(docText);
-                }
-            }
-        }
-        
-        // window.TFIDF 사용 (popup.js는 브라우저 환경)
-        if (documents.length === 0 || !window.TFIDF) {
-            console.warn('[TF-IDF REBUILD] 문서나 TFIDF 클래스가 없어 재구축 건너뜀.');
-            return;
-        }
-        
-        // 2. 새 TF-IDF 모델 구축 (새로운 Vocabulary 생성)
-        const newTfidfModel = new window.TFIDF();
-        newTfidfModel.buildVocabulary(documents);
-        
-        // 3. 모델 저장 (새 모델 덮어쓰기)
-        const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
-        await chrome.storage.local.set({
-            [TFIDF_MODEL_KEY]: newTfidfModel.serialize()
-        });
-        
-        // 4. 모든 북마크 벡터 갱신 (차원 동기화)
-        let updatedSummariesCount = 0;
-        for (const bookmarkId of bookmarkIds) {
-            const summaryData = summariesMap[bookmarkId];
-            if (summaryData) {
-                const docText = [
-                    summaryData.title || '',
-                    summaryData.englishSummary || '',
-                    summaryData.englishKeySnippet || '',
-                    summaryData.englishFolderName || ''
-                ].filter(text => text.trim() !== '').join(' ');
-                
-                // 새로운 모델을 사용하여 벡터 재계산 및 덮어쓰기
-                summaryData.tfidfVector = newTfidfModel.computeTFIDFVector(docText);
-                updatedSummariesCount++;
-            }
-        }
-        
-        // 5. 갱신된 summariesMap을 로컬 스토리지에 저장
-        await chrome.storage.local.set({
-            [storageKey]: summariesMap
-        });
-        
-        console.log(`[TF-IDF REBUILD] 모델 구축 완료 (Vocab 크기: ${newTfidfModel.vocabulary.size}). ${updatedSummariesCount}개 북마크 벡터 갱신 완료.`);
-    } catch (error) {
-        console.error('[TF-IDF] 모델 재구축 실패:', error);
-    }
-}
-
-/**
- * Chrome 북마크 시스템에 새 북마크를 생성하는 핵심 로직입니다.
- * @param {string} title 저장할 북마크의 제목
- * @param {string} url 저장할 웹페이지의 URL
- * @param {string} parentId 북마크를 저장할 폴더의 ID
- * @returns {Promise<object>} 생성된 북마크 객체 (ID, URL 등 포함)
- */
+/** Chrome에 새 북마크 저장 */
 function saveBookmark(title, url, parentId) {
-    // chrome.bookmarks.create를 사용하여 북마크를 생성합니다.
     return chrome.bookmarks.create({
-        parentId: parentId, // 선택한 폴더 ID
-        title: title,       // 입력 필드의 제목
-        url: url            // 현재 탭의 URL
+        parentId: parentId,
+        title: title,
+        url: url
     });
 }
 
-/**
- * Gemini API를 사용하여 텍스트 내용을 한 줄로 요약합니다.
- * @param {string} content 요약할 페이지의 전체 텍스트 내용
- * @returns {Promise<string>} Gemini가 생성한 한 줄 요약
- */
-async function summarizePageContent(content) {
-    if (!window.CONFIG || !window.CONFIG.GEMINI_API_KEY || window.CONFIG.GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
-        throw new Error("Gemini API 키가 설정되지 않았습니다. config.js 파일을 확인해주세요.");
-    }
-    
-    // Content 길이 단축: 10000 → 5000
-    let contentToAnalyze = content;
-    if (content.length > 5000) {
-        contentToAnalyze = content.substring(0, 5000);
-    }
-
-    // API 호출을 위한 프롬프트 (다국어 입력, 영어 출력)
-    const prompt = `
-    Analyze the following web page text (which may be in Korean, English, or other languages) and respond in JSON format.
-    Exclude advertisements, copyright notices, navigation links, and generic filler text.
-    
-    All text in the response, including keySnippet and summary fields, **MUST be written in plain English**, without any foreign characters, explanations, or added text.
-    
-    The response MUST follow this exact JSON schema:
-    {
-      "keySnippet": "[A concise, well-formed English sentence summarizing the core content, max 300 characters.]",
-      "summary": "[A brief, single-line English summary representing the entire page content.]"
-    }
-    
-    Text to analyze: "${contentToAnalyze}"`;
-
-    // 타임아웃 헬퍼 함수
-    function fetchWithTimeout(url, options, timeout = 15000) {
-        return Promise.race([
-            fetch(url, options),
-            new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Request timeout')), timeout)
-            )
-        ]);
-    }
-
-    // 재시도 함수
-    async function tryGemini(model, retryCount = 0) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${window.CONFIG.GEMINI_API_KEY}`;
-        
-        try {
-            const startTime = Date.now();
-            
-            // 15초 타임아웃 적용
-            const response = await fetchWithTimeout(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: [{ text: prompt }]
-                    }],
-                    generationConfig: { 
-                        temperature: 0.1,
-                        maxOutputTokens: 200  // 출력 제한 (빠른 응답)
-                    }
-                })
-            }, 15000);  // 15초 타임아웃
-
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-            console.log(`⏱️ [Gemini ${model}] 응답 시간: ${elapsed}초`);
-
-            // 503 에러 처리
-            if (response.status === 503) {
-                if (retryCount < 1) {  // 재시도 1회로 축소
-                    console.warn(`[Gemini] 503 에러, 1초 후 재시도...`);
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    return tryGemini(model, retryCount + 1);
-                } else {
-                    // 바로 1.5-flash로 전환
-                    console.warn('[Gemini] gemini-1.5-flash로 변경 시도');
-                    return tryGemini('gemini-1.5-flash', 0);
-                }
-            }
-
-            if (!response.ok) {
-                throw new Error(`API 호출 실패: ${response.status} ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-            
-            if (!rawText) {
-                return { summary: "Could not generate summary.", keySnippet: "No refined content found" };
-            }
-            
-            try {
-                const cleanJsonText = rawText.replace(/```json\s*/, '').replace(/\s*```/, '');
-                const jsonResponse = JSON.parse(cleanJsonText);
-                
-                return {
-                    summary: jsonResponse.summary?.trim() || "Summary failed",
-                    keySnippet: jsonResponse.keySnippet?.trim() || "No refined content found"
-                };
-            } catch (e) {
-                console.error("Gemini Response JSON Parsing Failed:", e, "Raw Text:", rawText);
-                return { 
-                    summary: "Summary parsing failed", 
-                    keySnippet: "Error in key snippet extraction" 
-                };
-            }
-            
-        } catch (error) {
-            console.error("Gemini Summarization API Error:", error);
-            
-            // 타임아웃 에러면 1.5-flash로 재시도
-            if (error.message === 'Request timeout' && model === 'gemini-2.0-flash-exp') {
-                console.warn('[Gemini] 타임아웃 발생, gemini-1.5-flash로 재시도');
-                return tryGemini('gemini-1.5-flash', 0);
-            }
-            
-            return { 
-                summary: "Summarization service error", 
-                keySnippet: "Summarization service error" 
-            };
-        }
-    }
-    return tryGemini(window.CONFIG?.GEMINI_MODEL || 'gemini-2.0-flash-exp');
-}
-/**
- * 콘텐츠 스크립트를 통해 현재 탭의 텍스트 내용을 요청합니다.
- * @returns {Promise<string>} 웹페이지의 텍스트 콘텐츠
- */
+/** 콘텐츠 스크립트로 페이지 본문 요청 */
 async function getPageContentForSummary() {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tabs.length) return "";
 
     const tabId = tabs[0].id;
-    
+
     try {
         await chrome.scripting.executeScript({
             target: { tabId: tabId },
             files: ['scripts/content.js']
         });
-        
-        console.log('[DEBUG] 1.5. content.js 주입 완료. 메시지 전송 시도.');
 
-        // 메시지를 보내 텍스트 콘텐츠를 요청합니다.
         const response = await chrome.tabs.sendMessage(tabId, { action: "getPageContent" });
 
         if (response && response.success) {
             return response.content;
-        } else {
-            console.error("페이지 콘텐츠 추출 실패: content.js 응답 문제");
-            return "";
         }
+        return "";
     } catch (e) {
-        // 스크립트 주입 또는 권한 문제 (chrome.tabs.query/sendMessage) 발생 시
-        console.error("Fatal Error: content.js 주입 실패 또는 통신 오류", e);
-        // 사용자에게 현재 페이지가 접근 가능한지 확인하도록 안내
-        return ""; 
+        return "";
     }
 }
 
-/**
- * 저장된 북마크 ID를 사용하여 로컬 스토리지에서 요약을 가져옵니다.
- * @param {string} bookmarkId 북마크 ID
- * @returns {Promise<string>} 요약 텍스트
- */
-async function getBookmarkSummary(bookmarkId) {
-    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
-    const allSummaries = await chrome.storage.local.get(storageKey);
-    const summaries = allSummaries[storageKey] || {};
-    
-    const summaryObject = summaries[bookmarkId];
-    if (summaryObject && typeof summaryObject === 'object') {
-        return summaryObject.summary || "요약 정보 없음";
-    }
-    
-    // 이전 버전 호환성 (문자열로 저장된 경우)
-    return summaryObject || "요약 정보 없음";
-}
-
-/**
- * 특정 URL과 일치하는 기존 북마크를 찾습니다.
- * @param {string} url 찾을 URL
- * @returns {Promise<object|null>} 찾은 북마크 객체 또는 null
- */
+/** URL로 기존 북마크 검색 */
 async function findExistingBookmarkByUrl(url) {
     try {
-        // Chrome 북마크 API를 사용하여 URL로 검색
         const bookmarks = await chrome.bookmarks.search({ url: url });
-        
+
         if (bookmarks && bookmarks.length > 0) {
-            console.log(`[DUPLICATE DEBUG] 중복 URL 발견: ${bookmarks.length}개`);
-            return bookmarks[0]; // 첫 번째 일치하는 북마크 반환
+            return bookmarks[0];
         }
-        
+
         return null;
     } catch (error) {
-        console.error('[DUPLICATE DEBUG] URL 검색 중 오류:', error);
         return null;
     }
 }
 
-/**
- * 로컬 스토리지에서 특정 북마크의 요약을 삭제합니다.
- * @param {string} bookmarkId 삭제할 북마크 ID
- */
+/** 로컬 스토리지에서 요약 제거 */
 async function removeSummaryFromLocal(bookmarkId) {
-    console.log(`[STORAGE DEBUG] 요약 삭제 시도: 북마크 ID ${bookmarkId}`);
-
-    // 1. 기존 데이터 로드
-    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+    const storageKey = getStorageKey();
     const allSummaries = await chrome.storage.local.get(storageKey);
     const summariesMap = allSummaries[storageKey] || {};
-    
-    // 2. 해당 북마크 ID 삭제
+
     if (summariesMap[bookmarkId]) {
         delete summariesMap[bookmarkId];
-        
-        // 3. 업데이트된 데이터 저장
         await chrome.storage.local.set({ [storageKey]: summariesMap });
-        
-        console.log(`[STORAGE DEBUG] 요약 삭제 완료. 남은 북마크 수: ${Object.keys(summariesMap).length}`);
-    } else {
-        console.log(`[STORAGE DEBUG] 삭제할 요약이 없음: 북마크 ID ${bookmarkId}`);
     }
 }
 
-/**
- * 썸네일 URL을 가져옵니다.
- * YouTube URL인 경우 YouTube 공식 썸네일 URL을 사용합니다.
- * 그 외의 경우 Cloud Function을 호출합니다.
- */
-async function getThumbnailUrl(url) {
-    // YouTube URL인 경우 YouTube 공식 썸네일 URL 사용
-    if (isYouTubeUrl(url)) {
-        const videoId = extractYouTubeVideoId(url);
-        if (videoId) {
-            // 표준화질 썸네일 (640×480)
-            const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/sddefault.jpg`;
-            console.log(`[YouTube] 썸네일 URL 생성: ${thumbnailUrl}`);
-            return thumbnailUrl;
-        } else {
-            console.warn('[YouTube] video ID를 추출할 수 없어 기본 썸네일 사용');
-            return 'placeholder_url';
-        }
-    }
-    
-    // 일반 웹페이지인 경우 Cloud Function 호출
-    if (!window.CONFIG || !window.CONFIG.THUMBNAIL_API_URL || window.CONFIG.THUMBNAIL_API_URL.includes('YOUR_THUMBNAIL_API_URL_HERE')) {
-         console.warn("썸네일 API URL이 설정되지 않았습니다. 플레이스홀더를 사용합니다.");
-         return 'placeholder_url'; // API 설정 전 임시 URL
-    }
-    
+/** 탭 썸네일 캡처 */
+async function captureTabThumbnail() {
     try {
-        const response = await fetch(window.CONFIG.THUMBNAIL_API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ targetUrl: url })
-        });
-        
-        if (!response.ok) {
-            console.warn(`썸네일 API 호출 실패: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        return data.thumbnail_url || 'placeholder_url';
+        const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 70 });
+        return await resizeImage(dataUrl, 640);
     } catch (error) {
-        console.error('썸네일 API 호출 중 오류:', error);
-        return 'placeholder_url';
+        return 'https://storage.googleapis.com/codemark-placeholders/default-placeholder.webp';
     }
 }
 
-//요약 정보와 썸네일 URL을 로컬 스토리지에 저장
-async function saveSummaryAndThumbnail(bookmarkId, summaryText, thumbnailUrl) {
-    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+/** 이미지 리사이즈 */
+function resizeImage(dataUrl, targetWidth) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const aspect = img.height / img.width;
+
+            canvas.width = targetWidth;
+            canvas.height = targetWidth * aspect;
+
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            resolve(canvas.toDataURL('image/webp', 0.8));
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+    });
+}
+
+/** 북마크 초기 메타데이터 저장 */
+async function saveInitialMetadata(bookmarkId, data) {
+    const storageKey = getStorageKey();
     const allSummaries = await chrome.storage.local.get(storageKey);
     const summariesMap = allSummaries[storageKey] || {};
-    
+
     summariesMap[bookmarkId] = {
-        summary: summaryText,
-        thumbnail: thumbnailUrl
+        title: data.title,
+        url: data.url,
+        folderName: data.folderName,
+        dateAdded: data.dateAdded,
+
+        summary: data.summary,
+        uiSummary: data.uiSummary,
+        keySnippet: data.summary,
+
+        thumbnail: data.thumbnail,
+
+        bertEmbedding: null,
+        tfidfVector: null,
+        tags: []
     };
-    
+
     await chrome.storage.local.set({ [storageKey]: summariesMap });
 }
 
-//요약 정보, 썸네일 URL, 임베딩을 로컬 스토리지에 저장
-async function saveSummaryAndThumbnailWithEmbedding(bookmarkId, title, englishSummary, englishKeySnippet, uiSummary, englishFolderName, thumbnailUrl, embedding, tfidfVector, bertEmbedding, tags) {
-    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
-    const allSummaries = await chrome.storage.local.get(storageKey);
-    const summariesMap = allSummaries[storageKey] || {};
-    
-    summariesMap[bookmarkId] = {
-        title: title,
-        englishSummary: englishSummary,
-        englishKeySnippet: englishKeySnippet,
-        uiSummary: uiSummary,
-        englishFolderName: englishFolderName,
-        thumbnail: thumbnailUrl,
-        embedding: embedding || null,           // USE 임베딩 (512차원)
-        tfidfVector: tfidfVector || null,       // TF-IDF 벡터
-        bertEmbedding: bertEmbedding || null,   // BERT 임베딩 (384차원)
-        tags: tags || [],                        // KeyBERT 자동 태그
-        url: currentUrl || null                  // URL 추가 (검색 결과 표시용)
-    };  
-    await chrome.storage.local.set({ [storageKey]: summariesMap });
-    console.log(`[STORAGE] 북마크 저장 완료: ID=${bookmarkId}, USE=${!!embedding}, TF-IDF=${!!tfidfVector}, BERT=${!!bertEmbedding}, Tags=${tags?.length || 0}`);
-}
-
-/**
- * 검색 버튼 클릭 핸들러
- */
+/** 검색 버튼/엔터 처리 */
 async function handleSearch() {
-    const searchStartTime = Date.now(); // ⏱️ 검색 시간 측정 시작
-    
     const searchQuery = document.getElementById('searchInput').value.trim();
     const statusElement = document.getElementById('search-status');
     const resultsElement = document.getElementById('results-output');
-    
+
     if (!searchQuery) {
-        statusElement.textContent = '검색어를 입력해주세요.';
+        statusElement.textContent = 'Please enter a search term.';
         return;
     }
-    
-    statusElement.textContent = '검색 중...';
+
+    statusElement.textContent = 'Searching...';
     resultsElement.innerHTML = '';
-    
+
     try {
-        // 1. textEmbedder 초기화 확인
-        if (!window.textEmbedder) {
-            throw new Error('textEmbedder를 사용할 수 없습니다.');
-        }
-        
-        if (!window.textEmbedder.isModelLoaded()) {
-            statusElement.textContent = '임베딩 모델 로딩 중...';
-            await window.textEmbedder.initialize({
-                onProgress: (progress) => {
-                    statusElement.textContent = `임베딩 모델 로딩: ${(progress.progress * 100).toFixed(0)}%`;
-                }
+        statusElement.textContent = 'Analyzing search term...';
+        let queryEmbedding = null;
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'GENERATE_BERT_EMBEDDING',
+                text: searchQuery
             });
+            if (response && response.success) {
+                queryEmbedding = response.embedding;
+            } else {
+                throw new Error(response.error || 'Embedding generation failed');
+            }
+        } catch (e) {
+            throw new Error('Search term analysis failed.');
         }
-        
-        // 2. 검색어 임베딩 생성
-        statusElement.textContent = '검색어 분석 중...';
-        const queryEmbedding = await window.textEmbedder.embedText(searchQuery);
-        
-        // 3. 저장된 북마크들과 임베딩 가져오기
-        statusElement.textContent = '북마크 검색 중...';
+
+        statusElement.textContent = 'Searching bookmarks...';
         const searchResults = await searchBookmarksByEmbedding(queryEmbedding, searchQuery);
-        
-        // 4. 결과 표시
+
         displaySearchResults(searchResults, resultsElement, statusElement);
-        
-        // ⏱️ 전체 검색 시간 출력 (UI 렌더링 포함)
-        const totalSearchTime = ((Date.now() - searchStartTime) / 1000).toFixed(2);
-        console.log(`⏱️ [POPUP] 전체 검색 완료 시간 (UI 포함): ${totalSearchTime}초`);
-        
+
     } catch (error) {
-        console.error('[SEARCH ERROR]', error);
-        statusElement.textContent = `검색 실패: ${error.message}`;
+        statusElement.textContent = `Search failed: ${error.message}`;
     }
 }
 
-/**
- * 임베딩을 사용하여 북마크 검색
- */
+/** 임베딩 기반 북마크 검색 */
 async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
-    const searchStartTime = Date.now(); // ⏱️ 검색 시간 측정 시작
-    
-    // 1. 모든 북마크 가져오기
     const allBookmarks = await chrome.bookmarks.getTree();
     const bookmarkList = [];
-    
-    // 북마크 트리를 평면화
+
     function flattenBookmarks(nodes) {
         for (const node of nodes) {
-            if (node.url) { // 실제 북마크인 경우
+            if (node.url) {
                 bookmarkList.push(node);
             }
             if (node.children) {
@@ -817,173 +514,113 @@ async function searchBookmarksByEmbedding(queryEmbedding, searchQuery) {
             }
         }
     }
-    
+
     flattenBookmarks(allBookmarks);
-    
-    // 2. 저장된 임베딩 정보 가져오기
-    const storageKey = window.CONFIG ? window.CONFIG.STORAGE_KEY : 'SmartMarkSummaries';
+
+    const storageKey = getStorageKey();
     const allSummaries = await chrome.storage.local.get(storageKey);
     const summariesMap = allSummaries[storageKey] || {};
 
-    // 3. TF-IDF 모델 로드
     const TFIDF_MODEL_KEY = 'SmartMarkTFIDFModel';
     const savedModel = await chrome.storage.local.get(TFIDF_MODEL_KEY);
     let tfidfModel = null;
     let queryTfIdfVector = null;
-    
+
     if (savedModel[TFIDF_MODEL_KEY] && window.TFIDF) {
         tfidfModel = new window.TFIDF();
         tfidfModel.deserialize(savedModel[TFIDF_MODEL_KEY]);
-        // 검색어 번역 (한글 → 영어)
-        let searchQueryForTfidf = searchQuery;
-        const hasKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(searchQuery);
-        
-        if (hasKorean) {
-            try {
-                const translateResponse = await fetch(window.CONFIG.DEEPL_API_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `DeepL-Auth-Key ${window.CONFIG.DEEPL_API_KEY}`,
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: new URLSearchParams({
-                        'text': searchQuery,
-                        'target_lang': 'EN-US'
-                    })
-                });
-
-                if (translateResponse.ok) {
-                    const data = await translateResponse.json();
-                    searchQueryForTfidf = data.translations[0].text;
-                    console.log(`[TF-IDF] 검색어 번역: "${searchQuery}" → "${searchQueryForTfidf}"`);
-                }
-            } catch (error) {
-                console.log('[TF-IDF] 번역 실패, 원본 사용:', error.message);
-            }
-        }
-        
-        // 검색어의 TF-IDF 벡터 계산
-        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQueryForTfidf);
+        queryTfIdfVector = tfidfModel.computeTFIDFVector(searchQuery);
     }
-    
-    // 4. 하이브리드 스코어링 가중치
+
     const results = [];
-    const ALPHA = 0.7; // 임베딩 가중치
-    const BETA = 0.3;  // TF-IDF 가중치
-    
+    const ALPHA = 0.7;
+    const BETA = 0.3;
+
     for (const bookmark of bookmarkList) {
         const summaryData = summariesMap[bookmark.id];
-        
-        if (summaryData && summaryData.embedding) {
-            // Semantic 점수 (임베딩 기반 코사인 유사도)
-            const semanticScore = window.textEmbedder.cosineSimilarity(
-                queryEmbedding, 
-                summaryData.embedding
-            );
-            
-            // Keyword 점수 (TF-IDF 기반 코사인 유사도)
-            let keywordScore = 0;
-            if (tfidfModel && queryTfIdfVector && summaryData.tfidfVector) {
-                // 벡터 차원 확인 및 조정
-                if (queryTfIdfVector.length !== summaryData.tfidfVector.length) {
-                    // 공통 차원까지만 사용하여 계산
-                    const minLength = Math.min(queryTfIdfVector.length, summaryData.tfidfVector.length);
-                    const queryVec = queryTfIdfVector.slice(0, minLength);
-                    const bookmarkVec = summaryData.tfidfVector.slice(0, minLength);
-                    keywordScore = tfidfModel.cosineSimilarity(queryVec, bookmarkVec);
-                } else {
-                    keywordScore = tfidfModel.cosineSimilarity(
-                        queryTfIdfVector,
-                        summaryData.tfidfVector
-                    );
-                }
+        if (!summaryData) continue;
+
+        const targetEmbedding = summaryData.bertEmbedding;
+        if (!targetEmbedding) continue;
+
+        let bertScore = 0;
+        if (queryEmbedding.length === targetEmbedding.length) {
+            bertScore = cosineSimilarity(queryEmbedding, targetEmbedding);
+        } else {
+            continue;
+        }
+
+        let keywordScore = 0;
+        if (tfidfModel && queryTfIdfVector && summaryData.tfidfVector) {
+            if (queryTfIdfVector.length === summaryData.tfidfVector.length) {
+                keywordScore = tfidfModel.cosineSimilarity(
+                    queryTfIdfVector,
+                    summaryData.tfidfVector
+                );
             }
-            
-            // BERT 점수 (popup.js에서는 BERT 임베딩 생성 안 함 - 백그라운드에서만)
-            let bertScore = 0;
-            // Note: popup.js에서는 실시간 BERT 임베딩 생성하지 않음 (시간이 너무 오래 걸림)
-            
-            // 최종 점수: α * USE + β * TF-IDF + γ * BERT
-            const finalScore = (ALPHA * semanticScore) + (BETA * keywordScore);
-            
-            // 디버그 정보 출력 (상위 10개만)
-            if (results.length < 10 || finalScore > 0.3) {
-                console.log(`[SEARCH DEBUG] "${bookmark.title}" - USE: ${(semanticScore * 100).toFixed(1)}%, TF-IDF: ${(keywordScore * 100).toFixed(1)}%, BERT: ${(bertScore * 100).toFixed(1)}%, Final: ${(finalScore * 100).toFixed(1)}%`);
-            }
-            
+        }
+
+        const finalScore = (ALPHA * bertScore) + (BETA * keywordScore);
+
+        if (finalScore > 0.15) {
             results.push({
                 bookmark: bookmark,
-                summary: summaryData.uiSummary || 'No summary information',
+                summary: summaryData.uiSummary || summaryData.summary || 'No summary information',
                 thumbnail: summaryData.thumbnail || '',
                 tags: summaryData.tags || [],
                 similarity: finalScore,
-                semanticScore: semanticScore,
+                semanticScore: bertScore,
                 keywordScore: keywordScore,
                 bertScore: bertScore,
                 score: Math.round(finalScore * 100)
             });
         }
     }
-    
-    // 4. 유사도 순으로 정렬하고 상위 10개만 반환
-    const finalResults = results
+
+    return results
         .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, 10)
-        .filter(result => result.similarity > 0.2); // 최소 유사도 20%로 상향 조정
-    
-    // ⏱️ 검색 시간 출력
-    const searchEndTime = Date.now();
-    const searchDuration = ((searchEndTime - searchStartTime) / 1000).toFixed(2);
-    console.log(`⏱️ [POPUP] 총 검색 시간: ${searchDuration}초`);
-    
-    return finalResults;
+        .slice(0, 10);
 }
 
-/**
- * 검색 결과를 UI에 표시
- */
+/** 검색 결과 렌더링 */
 function displaySearchResults(results, resultsElement, statusElement) {
     if (results.length === 0) {
-        statusElement.textContent = '검색 결과가 없습니다.';
-        resultsElement.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">검색 결과가 없습니다.<br>임베딩이 생성된 북마크가 있는지 확인해주세요.</div>';
+        statusElement.textContent = 'No search results found.';
+        resultsElement.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">No search results found.<br>Please ensure bookmarks have generated embeddings.</div>';
         return;
     }
-    
-    statusElement.textContent = `${results.length}개의 결과를 찾았습니다.`;
-    
+
+    statusElement.textContent = `Found ${results.length} results.`;
+
     resultsElement.innerHTML = results.map(result => {
-        // 태그 HTML 생성 (상위 3개만)
         const tagsHtml = result.tags && result.tags.length > 0
             ? `<div class="result-tags">
                 ${result.tags.slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}
                </div>`
             : '';
-        
+
         return `
             <div class="result-card" data-url="${result.bookmark.url}" style="cursor: pointer;">
                 <div class="result-thumbnail"><img src="${result.thumbnail}" alt="thumbnail"></div>
-                <div class="result-title" onclick="openBookmark('${result.bookmark.url}')">${result.bookmark.title}</div>
+                <div class="result-title">${escapeHtml(result.bookmark.title)}</div>
                 <div class="result-url">${result.bookmark.url}</div>
-                <div class="result-score">${result.score}% 일치</div>
+                <div class="result-score">${result.score}% Match</div>
                 <div style="font-size: 0.9em; color: #666; margin-top: 5px;">${result.summary}</div>
                 ${tagsHtml}
             </div>
         `;
     }).join('');
 
-    // 카드 클릭 이벤트 리스너 추가
     document.querySelectorAll('.result-card').forEach(card => {
         card.addEventListener('click', () => {
             const url = card.getAttribute('data-url');
-            chrome.tabs.create({ url: url });
+            openBookmarkUrl(url);
             window.close();
         });
     });
 }
 
-/**
- * HTML 이스케이프 (XSS 방지)
- */
+/** HTML 이스케이프 (XSS 방지) */
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -991,158 +628,15 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-/**
- * 북마크 열기
- */
-function openBookmark(url) {
-    chrome.tabs.create({ url: url });
-    window.close();
-}
-
-/**
- * 폴더 ID로 폴더 이름 가져오기
- */
+/** 폴더 ID로 폴더 이름 조회 */
 async function getFolderNameById(folderId) {
     try {
         const bookmarks = await chrome.bookmarks.get(folderId);
         if (bookmarks && bookmarks.length > 0) {
-            return bookmarks[0].title || '기타 북마크';
+            return bookmarks[0].title || 'Others';
         }
-        return '기타 북마크';
+        return 'Others';
     } catch (error) {
-        console.error('[FOLDER DEBUG] 폴더 이름 가져오기 실패:', error);
-        return '기타 북마크';
-    }
-}
-/**
- * YouTube URL에서 video ID 추출
- * @param {string} url YouTube URL
- * @returns {string|null} video ID 또는 null
- */
-function extractYouTubeVideoId(url) {
-    const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
-        /youtube\.com\/watch\?.*v=([^&\n?#]+)/
-    ];
-    
-    for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match && match[1]) {
-            return match[1];
-        }
-    }
-    return null;
-}
-
-/**
- * YouTube URL인지 확인
- * @param {string} url 확인할 URL
- * @returns {boolean} YouTube URL 여부
- */
-function isYouTubeUrl(url) {
-    return /youtube\.com|youtu\.be/.test(url);
-}
-
-
-/**
- * YouTube 페이지에서 직접 자막 추출 (Content Script 사용)
- * @param {string} videoId YouTube 동영상 ID (사용하지 않지만 호환성을 위해 유지)
- * @returns {Promise<string>} 자막 텍스트
- */
-async function extractYouTubeCaptionFromPage(videoId) {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tabs.length) return "";
-    
-    const tabId = tabs[0].id;
-    
-    // YouTube 페이지가 아니면 자막을 추출할 수 없음
-    if (!tabs[0].url.includes('youtube.com')) {
-        console.warn('[YouTube] 현재 탭이 YouTube 페이지가 아닙니다.');
-        return "";
-    }
-    
-    try {
-        // Content Script 주입하여 자막 추출
-        const results = await chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: extractCaptionFromYouTubePage
-        });
-        
-        if (results && results[0] && results[0].result) {
-            return results[0].result;
-        }
-        
-        return "";
-    } catch (error) {
-        console.error('[YouTube] 페이지에서 자막 추출 실패:', error);
-        return "";
-    }
-}
-
-/**
- * YouTube 페이지에서 자막을 추출하는 함수 (Content Script에서 실행)
- * 자막 패널(ytd-transcript-renderer)의 DOM 구조를 직접 쿼리하여 추출
- * 이 함수는 executeScript로 주입되어 실행됩니다.
- */
-function extractCaptionFromYouTubePage() {
-    try {
-        // YouTube 자막 패널에서 자막 세그먼트 추출
-        // ytd-transcript-segment-renderer 요소의 segment-text 클래스를 사용
-        const transcriptSegments = document.querySelectorAll('ytd-transcript-segment-renderer');
-        
-        if (transcriptSegments.length > 0) {
-            console.log(`[YouTube] 자막 세그먼트 발견: ${transcriptSegments.length}개`);
-            
-            const captionTexts = Array.from(transcriptSegments)
-                .map(segment => {
-                    // segment-text 클래스를 가진 요소에서 텍스트 추출
-                    const segmentText = segment.querySelector('.segment-text');
-                    if (segmentText) {
-                        return segmentText.textContent || segmentText.innerText || '';
-                    }
-                    // segment-text가 없으면 세그먼트 자체의 텍스트 사용
-                    return segment.textContent || segment.innerText || '';
-                })
-                .filter(text => text.trim().length > 0)
-                .join(' ');
-            
-            if (captionTexts.trim()) {
-                console.log(`[YouTube] 자막 추출 성공: ${captionTexts.length}자`);
-                return captionTexts.trim();
-            }
-        }
-        
-        // 자막 패널이 열려있지 않은 경우를 대비한 대체 방법
-        // 자막 패널을 찾을 수 없으면 빈 문자열 반환
-        console.warn('[YouTube] 자막 패널을 찾을 수 없습니다. 자막 패널이 열려있는지 확인해주세요.');
-        return "";
-        
-    } catch (error) {
-        console.error('[YouTube] 자막 추출 오류:', error);
-        return "";
-    }
-}
-
-/**
- * YouTube 자막을 가져와서 텍스트로 변환
- * 자막 패널(ytd-transcript-renderer)의 DOM 구조를 직접 쿼리하여 추출
- * @param {string} videoId YouTube 동영상 ID
- * @returns {Promise<string>} 자막 텍스트
- */
-async function getYouTubeCaptionText(videoId) {
-    try {
-        console.log('[YouTube] 페이지에서 자막 추출 시도...');
-        const captionText = await extractYouTubeCaptionFromPage(videoId);
-        
-        if (captionText && captionText.trim()) {
-            console.log(`[YouTube] ✅ 자막 추출 성공: ${captionText.length}자`);
-            return captionText;
-        }
-        
-        throw new Error("YouTube 자막을 찾을 수 없습니다. 자막 패널이 열려있는지 확인해주세요.");
-        
-    } catch (error) {
-        console.error('[YouTube] 자막 가져오기 실패:', error);
-        throw error;
+        return 'Others';
     }
 }

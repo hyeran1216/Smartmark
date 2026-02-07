@@ -1,13 +1,19 @@
 const path = require('path');
 
 module.exports = {
-  entry: './offscreen-bert-source.js',
+  // Bundle the offscreen script to resolve @xenova/transformers
+  entry: './scripts/offscreen-bert.js',
   output: {
     filename: 'offscreen-bert.bundle.js',
-    path: path.resolve(__dirname),
+    path: path.resolve(__dirname, 'dist'),
+    module: true, // Output as ES Module
     library: {
-      type: 'window'
-    }
+      type: 'module', // Key change: Export as module
+    },
+    chunkFormat: 'module',
+  },
+  experiments: {
+    outputModule: true, // Required for module output
   },
   mode: 'production',
   resolve: {
@@ -15,7 +21,8 @@ module.exports = {
     fallback: {
       "fs": false,
       "path": false,
-      "crypto": false
+      "crypto": false,
+      "stream": false
     }
   },
   performance: {

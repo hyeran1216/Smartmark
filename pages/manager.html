@@ -1,20 +1,23 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <title>SmartMark Manager</title>
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            padding: 20px; 
-            background-color: #f4f7f6; 
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f4f7f6;
             min-width: 800px;
         }
-        h1 { 
-            color: #333; 
-            border-bottom: 2px solid #007bff; 
+
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #007bff;
             padding-bottom: 10px;
         }
+
         .folder-section {
             margin-bottom: 30px;
             padding: 15px;
@@ -22,6 +25,7 @@
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
         }
+
         .folder-title {
             font-size: 1.5em;
             color: #007bff;
@@ -30,12 +34,17 @@
             padding-left: 10px;
             font-weight: bold;
         }
+
         .bookmark-container {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
             gap: 20px;
         }
+
         .bookmark-card {
+            display: flex;
+            flex-direction: column;
+            height: auto;
             border: 1px solid #ddd;
             border-radius: 6px;
             padding: 15px;
@@ -43,19 +52,24 @@
             background-color: #f9f9f9;
             cursor: pointer;
         }
+
         .bookmark-card:hover {
             transform: translateY(-3px);
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
         }
+
         .card-image {
             width: 100%;
-            height: 150px; /* 썸네일 높이 */
-            background-color: #eee; /* 임시 배경 */
+            height: 150px;
+            /* 썸네일 높이 */
+            background-color: #eee;
+            /* 임시 배경 */
             margin-bottom: 10px;
             border-radius: 4px;
             object-fit: cover;
             display: block;
         }
+
         .card-title {
             font-size: 1.1em;
             font-weight: bold;
@@ -64,6 +78,7 @@
             text-decoration: none;
             display: block;
         }
+
         .card-url {
             font-size: 0.8em;
             color: #666;
@@ -72,6 +87,7 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
         .card-summary {
             background-color: #e6f0ff;
             color: #0056b3;
@@ -81,14 +97,17 @@
             line-height: 1.4;
             border-left: 3px solid #007bff;
         }
-        
+
         /* 태그 스타일 */
-        .card-tags, .result-tags {
+        .card-tags,
+        .result-tags {
             display: flex;
             gap: 6px;
             margin-top: 10px;
             flex-wrap: wrap;
+            align-content: flex-start;
         }
+
         .tag {
             display: inline-block;
             padding: 4px 10px;
@@ -97,7 +116,13 @@
             border-radius: 12px;
             font-size: 11px;
             font-weight: 500;
-            white-space: nowrap;
+            white-space: normal;
+            word-break: break-word;
+            max-width: 100%;
+        }
+
+        .tag:hover {
+            white-space: normal;
         }
 
         /* 검색 기능 스타일 추가 */
@@ -108,10 +133,12 @@
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
+
         #search-container {
             display: flex;
             margin-bottom: 10px;
         }
+
         #searchInput {
             flex-grow: 1;
             padding: 10px;
@@ -119,6 +146,7 @@
             border-radius: 4px;
             font-size: 14px;
         }
+
         #searchButton {
             margin-left: 10px;
             padding: 10px 20px;
@@ -129,14 +157,17 @@
             cursor: pointer;
             white-space: nowrap;
         }
+
         #searchButton:hover {
             background-color: #357ae8;
         }
+
         #search-status {
             margin-bottom: 10px;
             font-size: 0.9em;
             color: #666;
         }
+
         #results-output {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -145,6 +176,7 @@
             overflow-y: auto;
             margin-top: 10px;
         }
+
         .result-card {
             border: 1px solid #eee;
             padding: 15px;
@@ -154,10 +186,12 @@
             transition: transform 0.2s, box-shadow 0.2s;
             cursor: pointer;
         }
+
         .result-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
+
         .result-thumbnail {
             width: 100%;
             height: 150px;
@@ -169,11 +203,13 @@
             border-radius: 4px;
             background-color: #eee;
         }
+
         .result-thumbnail img {
             max-width: 100%;
             max-height: 100%;
             object-fit: contain;
         }
+
         .result-title {
             font-weight: bold;
             font-size: 1.1em;
@@ -182,6 +218,7 @@
             text-decoration: none;
             display: block;
         }
+
         .result-url {
             font-size: 0.8em;
             color: #666;
@@ -190,12 +227,14 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
         .result-score {
             float: right;
             font-size: 0.8em;
             color: #f4b400;
             font-weight: bold;
         }
+
         .result-summary {
             background-color: #e6f0ff;
             color: #0056b3;
@@ -207,6 +246,7 @@
         }
     </style>
 </head>
+
 <body>
     <h1>SmartMark</h1>
 
@@ -222,7 +262,8 @@
 
     <!-- 검색 섹션 추가 -->
     <div class="search-section">
-        <label for="searchInput" style="font-weight: bold; margin-bottom: 10px; display: block;">🔍 search bookmarks:</label>
+        <label for="searchInput" style="font-weight: bold; margin-bottom: 10px; display: block;">🔍 search
+            bookmarks:</label>
         <div id="search-container">
             <input type="text" id="searchInput" placeholder="enter the content to search..." />
             <button id="searchButton">search</button>
@@ -230,25 +271,26 @@
         <div id="search-status" style="margin-bottom: 10px; font-size: 0.9em;"></div>
         <div id="results-output"></div>
     </div>
-    
+
     <!-- 폴더 필터 컨트롤 -->
-    <div style="margin-bottom: 20px; padding: 15px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
+    <div
+        style="margin-bottom: 20px; padding: 15px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
         <label for="folderFilter" style="font-weight: bold; margin-right: 10px;">📁 view by folder:</label>
-        <select id="folderFilter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 200px;">
+        <select id="folderFilter"
+            style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-width: 200px;">
             <option value="all">all smart bookmarks</option>
         </select>
-        <button id="refreshButton" style="margin-left: 10px; padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">🔄 refresh</button>
+        <button id="refreshButton"
+            style="margin-left: 10px; padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">🔄
+            refresh</button>
     </div>
-    
-    <div id="bookmark-output">
-        </div>
 
-    <script src="../libs/tf.es2017.min.js"></script>
-    <script src="../libs/universal-sentence-encoder.min.js"></script>
+    <div id="bookmark-output">
+    </div>
+
     <script src="../utils/tfidf.js"></script>
     <script src="../config.js"></script>
-    <script src="../scripts/textEmbedder.js"></script>
-    <script src="../scripts/popup.js"></script>
-    <script src="../scripts/manager.js"></script>
+    <script type="module" src="../scripts/manager.js"></script>
 </body>
+
 </html>

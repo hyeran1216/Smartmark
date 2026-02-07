@@ -1,23 +1,52 @@
 /**
- * 경량 TF-IDF 구현 (순수 JavaScript)
+ * 경량 TF-IDF 구현 (순수 JavaScript + Intl.Segmenter)
+ * 다국어(한국어 포함) 지원 강화
  */
 class TFIDF {
   constructor() {
     this.vocabulary = new Map(); // 단어 -> 인덱스 매핑
     this.idf = new Map(); // 단어 -> IDF 값
     this.totalDocuments = 0;
+
+    // 다국어 형태소 분석을 위한 Intl.Segmenter (Chrome 87+)
+    this.segmenter = null;
+    try {
+      this.segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
+    } catch (e) {
+      console.warn('[TF-IDF] Intl.Segmenter 미지원, 기본 공백 분할 사용');
+    }
   }
 
   /**
-   * 텍스트를 토큰화 (소문자, 알파벳/숫자만)
+   * 텍스트를 토큰화 (다국어 지원)
    */
   tokenize(text) {
     if (!text || typeof text !== 'string') return [];
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s]/g, ' ') // 특수문자 제거
-      .split(/\s+/)
-      .filter(token => token.length > 0);
+
+    // 1. 소문자 변환 및 정규화
+    // 특수문자는 보존하되 나중에 필터링
+    const normalized = text.toLowerCase().trim();
+
+    if (this.segmenter) {
+      // Intl.Segmenter 사용 (한국어/CJK에 효과적)
+      const segments = this.segmenter.segment(normalized);
+      const tokens = [];
+
+      for (const seg of segments) {
+        // 단어인 경우만 추출 (isWordLike: true)
+        // 길이 2 이상 권장 (의미 있는 단어)
+        if (seg.isWordLike && seg.segment.length >= 1) {
+          tokens.push(seg.segment);
+        }
+      }
+      return tokens;
+    } else {
+      // Fallback: 공백 분할 (기존 방식)
+      return normalized
+        .replace(/[^\w\s가-힣]/g, ' ')
+        .split(/\s+/)
+        .filter(token => token.length > 0);
+    }
   }
 
   /**
@@ -33,6 +62,7 @@ class TFIDF {
     // 1. 모든 문서를 토큰화하고 Vocabulary 구축
     documents.forEach((doc, docIndex) => {
       const tokens = this.tokenize(doc);
+      // 문서 내 중복 토큰 제거 (단어 존재 여부만 중요: Binary DF)
       const uniqueTokens = new Set(tokens);
 
       uniqueTokens.forEach(token => {
@@ -46,9 +76,10 @@ class TFIDF {
       });
     });
 
-    // 2. IDF 계산: idf(t) = log(N / df(t))
+    // 2. IDF 계산: idf(t) = log(N / (df(t) + 1)) + 1 (Smoothing)
     documentFrequencies.forEach((df, token) => {
-      const idfValue = Math.log(this.totalDocuments / df);
+      // Smoothing applied to avoid division by zero and extreme values
+      const idfValue = Math.log((this.totalDocuments + 1) / (df + 1)) + 1;
       this.idf.set(token, idfValue);
     });
 
@@ -56,7 +87,8 @@ class TFIDF {
   }
 
   /**
-   * 단일 문서의 TF-IDF 벡터 계산
+   * 단일 문서의 TF-IDF 벡터 계산 (Sparse Vector: Object)
+   * Return format: { "term1": 0.5, "term2": 0.3 }
    */
   computeTFIDFVector(text) {
     const tokens = this.tokenize(text);
@@ -67,14 +99,15 @@ class TFIDF {
       termFrequencies.set(token, (termFrequencies.get(token) || 0) + 1);
     });
 
-    // TF-IDF 벡터 생성 (Vocabulary 크기만큼)
-    const vector = new Array(this.vocabulary.size).fill(0);
+    // TF-IDF 벡터 생성 (Sparse)
+    const vector = {};
 
     termFrequencies.forEach((tf, token) => {
-      const tokenIndex = this.vocabulary.get(token);
-      if (tokenIndex !== undefined) {
+      // Vocabulary에 있는 단어만 처리 (Unknown words ignored)
+      if (this.vocabulary.has(token)) {
         const idfValue = this.idf.get(token) || 0;
-        vector[tokenIndex] = tf * idfValue;
+        // TF-IDF = tf * idf
+        vector[token] = tf * idfValue;
       }
     });
 
@@ -83,34 +116,45 @@ class TFIDF {
   }
 
   /**
-   * 벡터 L2 정규화
+   * 벡터 L2 정규화 (Sparse Vector)
    */
   normalizeVector(vector) {
+    const terms = Object.keys(vector);
     const magnitude = Math.sqrt(
-      vector.reduce((sum, val) => sum + val * val, 0)
+      terms.reduce((sum, term) => sum + vector[term] * vector[term], 0)
     );
+
     if (magnitude === 0) return vector;
-    return vector.map(val => val / magnitude);
+
+    const normalized = {};
+    terms.forEach(term => {
+      normalized[term] = vector[term] / magnitude;
+    });
+    return normalized;
   }
 
   /**
-   * 두 TF-IDF 벡터 간 코사인 유사도 계산
+   * 두 TF-IDF 벡터 간 코사인 유사도 계산 (Sparse Vector)
    */
   cosineSimilarity(vecA, vecB) {
-    if (!vecA || !vecB || vecA.length !== vecB.length) {
-      return 0;
-    }
+    if (!vecA || !vecB) return 0;
 
+    // Sparse Vector Dot Product
+    // 교집합 단어에 대해서만 연산
     let dotProduct = 0;
-    for (let i = 0; i < vecA.length; i++) {
-      dotProduct += vecA[i] * vecB[i];
+    const keysA = Object.keys(vecA);
+
+    for (const term of keysA) {
+      if (vecB[term] !== undefined) {
+        dotProduct += vecA[term] * vecB[term];
+      }
     }
 
     return dotProduct; // 이미 정규화된 벡터이므로 내적만 계산
   }
 
   /**
-   * Vocabulary 및 IDF를 직렬화하여 저장
+   * 직렬화하여 저장
    */
   serialize() {
     return {

@@ -1,17 +1,11 @@
 // 배경 스크립트에서 메시지를 받으면 실행됩니다.
 chrome.runtime.onMessage.addListener(
-    function(request, sender, sendResponse) {
+    function (request, sender, sendResponse) {
         if (request.action === "getPageContent") {
             try {
-                // <script>나 <style> 태그를 제외한 body의 모든 텍스트를 가져옵니다.
-                // 더 정확한 추출을 위해 DOM 파싱을 수행합니다.
                 const body = document.body;
-                
-                // 가시적인 텍스트만 추출하는 함수
                 function getVisibleText(element) {
                     let text = '';
-                    
-                    // 무시할 태그 목록 (헤더, 푸터, 내비게이션, 광고 등)
                     const IGNORE_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'HEADER', 'FOOTER', 'NAV', 'ASIDE', 'FORM'];
                     if (element.nodeType === 3) { // 텍스트 노드
                         text += element.nodeValue;
@@ -20,16 +14,93 @@ chrome.runtime.onMessage.addListener(
                             text += getVisibleText(child) + ' ';
                         }
                     }
-                    return text.replace(/\s\s+/g, ' ').trim(); // 연속된 공백 제거
+                    return text.replace(/\s\s+/g, ' ').trim();
                 }
-                
                 const pageContent = getVisibleText(body);
-
                 sendResponse({ success: true, content: pageContent });
             } catch (e) {
                 sendResponse({ success: false, error: e.message });
             }
-            return true; // 비동기 응답을 위해 true 반환
+            return true;
+        }
+
+        // --- NEW: Handle Async Summarization in Content Script ---
+        if (request.action === "TRIGGER_SUMMARIZATION") {
+            const { bookmarkId, title, url, folderName, thumbnailUrl } = request;
+            console.log('[CONTENT] Triggered AI Summarization for:', bookmarkId);
+
+            (async () => {
+                try {
+                    // 1. Check window.ai
+                    const ai = window.ai;
+                    if (!ai || !ai.summarizer) {
+                        console.warn('[CONTENT] window.ai not found.');
+                        throw new Error('AI_UNAVAILABLE');
+                    }
+
+                    const capabilities = await ai.summarizer.capabilities();
+                    if (capabilities.available === 'no') {
+                        console.warn('[CONTENT] window.ai available === no');
+                        throw new Error('AI_UNAVAILABLE');
+                    }
+
+                    // 2. Extract Content
+                    const body = document.body;
+                    function getVisibleText(element) { // Duplicate for now to keep self-contained
+                        let text = '';
+                        const IGNORE_TAGS = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'HEADER', 'FOOTER', 'NAV', 'ASIDE', 'FORM'];
+                        if (element.nodeType === 3) text += element.nodeValue;
+                        else if (element.nodeType === 1 && !IGNORE_TAGS.includes(element.tagName)) {
+                            for (const child of element.childNodes) text += getVisibleText(child) + ' ';
+                        }
+                        return text.replace(/\s\s+/g, ' ').trim();
+                    }
+                    const text = getVisibleText(body).substring(0, 10000); // Limit context
+
+                    // 3. Summarize
+                    console.log('[CONTENT] Creating summarizer session...');
+                    const session = await ai.summarizer.create({ type: 'key-points', length: 'medium', format: 'plain-text' });
+
+                    if (capabilities.available === 'after-download') {
+                        console.log('[CONTENT] Waiting for model download...');
+                        await session.ready;
+                    }
+
+                    console.log('[CONTENT] Generating summary...');
+                    const summary = await session.summarize(text);
+                    session.destroy();
+
+                    console.log('[CONTENT] Summary generated:', summary.substring(0, 50));
+
+                    // 4. Report Success to Background
+                    chrome.runtime.sendMessage({
+                        type: 'UPDATE_BOOKMARK_SUMMARY',
+                        bookmarkId: bookmarkId,
+                        summary: summary,
+                        keySnippet: "Generated on-device via Chrome AI",
+                        title: title,
+                        folderName: folderName,
+                        thumbnailUrl: thumbnailUrl,
+                        url: url
+                    });
+
+                } catch (error) {
+                    console.warn('[CONTENT] Summarization failed:', error.message);
+                    // 5. Report Failure (Fallback to Background Cloud)
+                    chrome.runtime.sendMessage({
+                        type: 'AI_UNAVAILABLE_FALLBACK',
+                        error: error.message,
+                        bookmarkId: bookmarkId,
+                        title: title,
+                        url: url,
+                        folderName: folderName,
+                        thumbnailUrl: thumbnailUrl
+                    });
+                }
+            })();
+
+            sendResponse({ received: true }); // Ack immediately
+            return true;
         }
     }
 );

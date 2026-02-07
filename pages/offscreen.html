@@ -1,24 +1,24 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <title>SmartMark Offscreen Document</title>
 </head>
+
 <body>
     <!-- Offscreen document for multi-model embedding generation -->
-    
-    <!-- USE (Universal Sentence Encoder) - WebGL -->
-    <script src="../libs/tf.es2017.min.js"></script>
-    <script src="../libs/universal-sentence-encoder.min.js"></script>
+
+    <!-- USE scripts removed -->
     <script src="../config.js"></script>
-    <script src="../scripts/textEmbedder.js"></script>
-    
-    <!-- BERT (all-MiniLM-L6-v2) - ONNX Runtime -->
+    <!-- textEmbedder.js removed -->
+
+    <!-- BERT (Multilingual) - ONNX Runtime -->
     <script src="../libs/ort.min.js"></script>
-    <script src="../scripts/offscreen-bert.js"></script>
-    
+    <script type="module" src="../dist/offscreen-bert.bundle.js"></script>
+
     <!-- Main offscreen coordinator -->
     <script src="../scripts/offscreen.js"></script>
 </body>
-</html>
 
+</html>

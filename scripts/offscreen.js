@@ -1,12 +1,10 @@
 // Offscreen Document Script for SmartMark
-// Multi-model embeddings: USE (WebGL) + BERT (WASM)
+// BERT-only embeddings via @xenova/transformers
 
-console.log('[OFFSCREEN] Multi-model Offscreen document 초기화 중...');
+console.log('[OFFSCREEN] Offscreen document 초기화 중...');
 
 // Model status tracking
-let useEmbedderReady = false;
-let bertEmbedderReady = false;
-let loadingError = null;
+// bertEmbedder keeps its own state, we just relay
 const loadStartTime = Date.now();
 
 /**
@@ -14,9 +12,9 @@ const loadStartTime = Date.now();
  */
 function notifyBackground(message) {
     try {
-        chrome.runtime.sendMessage({ 
-            type: 'OFFSCREEN_STATUS', 
-            ...message 
+        chrome.runtime.sendMessage({
+            type: 'OFFSCREEN_STATUS',
+            ...message
         }).catch(e => {
             // Background가 아직 준비 안 됐을 수 있음
             console.log('[OFFSCREEN] Background 메시지 전송 실패 (정상):', e.message);
@@ -26,124 +24,63 @@ function notifyBackground(message) {
     }
 }
 
-// USE (TextEmbedder) 초기화
-(async () => {
-    try {
-        console.log('[OFFSCREEN] USE 모델 로드 확인 중...');
-        notifyBackground({ status: 'script_loaded', message: 'USE 모델 로드 시작...' });
-        
-        // textEmbedder 객체 존재 확인
-        if (!window.textEmbedder) {
-            const errorMsg = 'textEmbedder 객체를 찾을 수 없습니다.';
-            console.error(`[OFFSCREEN] ${errorMsg}`);
-            loadingError = errorMsg;
-            notifyBackground({ status: 'error', message: errorMsg });
-            return;
-        }
-        
-        console.log('[OFFSCREEN-USE] TensorFlow.js 버전:', tf.version.tfjs);
-        console.log('[OFFSCREEN-USE] 초기 백엔드:', tf.getBackend());
-        
-        notifyBackground({ 
-            status: 'loading', 
-            message: 'USE 모델 다운로드 중... (첫 실행 시 1-2분)',
-            backend: tf.getBackend()
-        });
-        
-        const progressInterval = setInterval(() => {
-            const elapsed = ((Date.now() - loadStartTime) / 1000).toFixed(0);
-            console.log(`[OFFSCREEN-USE] 로딩 중... (${elapsed}초)`);
-        }, 10000);
-        
-        await window.textEmbedder.initialize();
-        clearInterval(progressInterval);
-        
-        const loadTime = ((Date.now() - loadStartTime) / 1000).toFixed(2);
-        useEmbedderReady = true;
-        
-        console.log(`[OFFSCREEN-USE] ✅ 로드 완료! (${loadTime}초, 512차원)`);
-        console.log(`[OFFSCREEN-USE] 백엔드: ${tf.getBackend()}`);
-        
-        notifyBackground({ 
-            status: 'ready', 
-            message: `USE 모델 로드 완료 (${loadTime}초)`,
-            model: 'USE',
-            dimension: 512,
-            backend: tf.getBackend(),
-            loadTime: parseFloat(loadTime)
-        });
-    } catch (error) {
-        console.error('[OFFSCREEN-USE] ❌ 초기화 실패:', error);
-        loadingError = error.message;
-        notifyBackground({ 
-            status: 'error', 
-            message: `USE 초기화 실패: ${error.message}`,
-            model: 'USE',
-            error: error.message
-        });
-    }
-})();
-
-// BERT 모델 상태 모니터링
-setInterval(() => {
-    if (window.bertEmbedder && window.bertEmbedder.ready()) {
-        if (!bertEmbedderReady) {
-            bertEmbedderReady = true;
-            console.log('[OFFSCREEN] ✅ BERT 모델도 준비 완료!');
-        }
-    }
-}, 1000);
-
-// Background.js로부터 메시지 수신 (Multi-model support)
+// Background.js로부터 메시지 수신
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('[OFFSCREEN] 메시지 수신:', message);
+    // console.log('[OFFSCREEN] 메시지 수신:', message.type);
 
-    // USE 임베딩 생성 (기본, 512차원)
-    if (message.type === 'GENERATE_EMBEDDING') {
-        handleUSEEmbeddingRequest(message.text, sendResponse);
-        return true;
-    }
-    
-    // BERT 임베딩 생성 (384차원)
-    if (message.type === 'GENERATE_BERT_EMBEDDING') {
+    // Multilingual BERT 임베딩 생성 (384차원)
+    // 기존 USE 요청도 BERT로 처리하도록 통합
+    if (message.type === 'GENERATE_EMBEDDING' || message.type === 'GENERATE_BERT_EMBEDDING') {
         handleBERTEmbeddingRequest(message.text, sendResponse);
         return true;
     }
-    
+
     // KeyBERT 키워드 추출
     if (message.type === 'EXTRACT_KEYWORDS') {
         handleKeywordExtraction(message.text, message.candidates, sendResponse);
         return true;
     }
-    
+
     // N-gram 추출
     if (message.type === 'EXTRACT_NGRAMS') {
         handleNGramExtraction(message.text, sendResponse);
         return true;
     }
-    
-    // 텍스트 번역 (DeepL)
-    if (message.type === 'TRANSLATE_TEXT') {
-        handleTranslation(message.text, message.targetLang, sendResponse);
-        return true;
-    }
-    
+
     // BERT 통합 처리 (임베딩 + 키워드 추출)
+    // Multilingual Model은 문서 임베딩과 키워드 추출을 한 번에 처리하기 좋음
     if (message.type === 'BERT_FULL_PROCESS') {
         handleBERTFullProcess(message.text, sendResponse);
         return true;
     }
 
+    // Handle INIT_BERT mostly for explicit initialization from BG
+    if (message.type === 'INIT_BERT') {
+        console.log('[OFFSCREEN] INIT_BERT received');
+        if (window.bertEmbedder && window.bertEmbedder.init) {
+            window.bertEmbedder.init().then(() => {
+                console.log('[OFFSCREEN] BERT Initialized via INIT_BERT');
+                sendResponse({ success: true });
+            }).catch(err => {
+                console.error('[OFFSCREEN] BERT Init failed:', err);
+                sendResponse({ success: false, error: err.message });
+            });
+            return true; // async response
+        } else {
+            console.error('[OFFSCREEN] BERT Embedder or init not found');
+            sendResponse({ success: false, error: 'Embedder not ready' });
+        }
+        return false;
+    }
+
     // 모델 준비 상태 확인
     if (message.type === 'CHECK_READY') {
         const elapsed = ((Date.now() - loadStartTime) / 1000).toFixed(1);
-        const ready = useEmbedderReady;
-        sendResponse({ 
+        const ready = window.bertEmbedder ? window.bertEmbedder.ready() : false;
+        sendResponse({
             ready: ready,
-            use: useEmbedderReady,
-            bert: bertEmbedderReady,
-            error: loadingError,
-            elapsed: parseFloat(elapsed)
+            elapsed: parseFloat(elapsed),
+            lazy: true // Indicate lazy loading support
         });
         return false;
     }
@@ -152,73 +89,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * USE 임베딩 생성 요청 처리 (512차원)
- */
-async function handleUSEEmbeddingRequest(text, sendResponse) {
-    if (!useEmbedderReady) {
-        console.warn('[OFFSCREEN] USE 모델이 아직 준비되지 않았습니다.');
-        sendResponse({ success: false, error: 'USE not ready' });
-        return;
-    }
-
-    try {
-        const startTime = performance.now();
-        console.log(`[OFFSCREEN-USE] 임베딩 생성: "${text.substring(0, 50)}..."`);
-        
-        const embedding = await window.textEmbedder.embedText(text);
-        const elapsedTime = (performance.now() - startTime).toFixed(2);
-        
-        console.log(`[OFFSCREEN-USE] ✅ 완료 (${elapsedTime}ms, ${embedding.length}차원)`);
-        
-        sendResponse({ 
-            success: true, 
-            embedding: embedding,
-            dimension: embedding.length,
-            model: 'USE',
-            responseTime: parseFloat(elapsedTime)
-        });
-    } catch (error) {
-        console.error('[OFFSCREEN-USE] 임베딩 생성 실패:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message,
-            model: 'USE'
-        });
-    }
-}
-
-/**
- * BERT 임베딩 생성 요청 처리 (384차원)
+ * BERT 임베딩 생성 요청 처리
  */
 async function handleBERTEmbeddingRequest(text, sendResponse) {
-    if (!bertEmbedderReady || !window.bertEmbedder) {
-        console.warn('[OFFSCREEN] BERT 모델이 아직 준비되지 않았습니다.');
-        sendResponse({ success: false, error: 'BERT not ready' });
+    // Lazy Load: We don't check for ready() because embed() handles ensuring loaded.
+    if (!window.bertEmbedder) {
+        sendResponse({ success: false, error: 'BERT embedder script not loaded' });
         return;
     }
 
     try {
         const startTime = performance.now();
-        console.log(`[OFFSCREEN-BERT] 임베딩 생성: "${text.substring(0, 50)}..."`);
-        
+        // console.log(`[OFFSCREEN-BERT] 임베딩 생성: "${text.substring(0, 30)}..."`);
+
         const embedding = await window.bertEmbedder.embed(text);
         const elapsedTime = (performance.now() - startTime).toFixed(2);
-        
-        console.log(`[OFFSCREEN-BERT] ✅ 완료 (${elapsedTime}ms, ${embedding.length}차원)`);
-        
-        sendResponse({ 
-            success: true, 
+
+        sendResponse({
+            success: true,
             embedding: embedding,
             dimension: embedding.length,
-            model: 'BERT',
+            model: 'Multilingual-BERT',
             responseTime: parseFloat(elapsedTime)
         });
     } catch (error) {
         console.error('[OFFSCREEN-BERT] 임베딩 생성 실패:', error);
-        sendResponse({ 
-            success: false, 
+        sendResponse({
+            success: false,
             error: error.message,
-            model: 'BERT'
+            model: 'Multilingual-BERT'
         });
     }
 }
@@ -227,31 +126,17 @@ async function handleBERTEmbeddingRequest(text, sendResponse) {
  * KeyBERT 키워드 추출
  */
 async function handleKeywordExtraction(text, candidates, sendResponse) {
-    if (!bertEmbedderReady || !window.bertEmbedder) {
-        sendResponse({ success: false, error: 'BERT not ready for keyword extraction' });
+    if (!window.bertEmbedder) {
+        sendResponse({ success: false, error: 'BERT embedder not loaded' });
         return;
     }
 
     try {
-        const startTime = performance.now();
-        console.log(`[KeyBERT] 키워드 추출 시작: ${candidates.length}개 후보`);
-        
         const keywords = await window.bertEmbedder.extractKeywords(text, candidates);
-        const elapsedTime = (performance.now() - startTime).toFixed(2);
-        
-        console.log(`[KeyBERT] ✅ 완료 (${elapsedTime}ms):`, keywords);
-        
-        sendResponse({ 
-            success: true, 
-            keywords: keywords,
-            responseTime: parseFloat(elapsedTime)
-        });
+        sendResponse({ success: true, keywords: keywords });
     } catch (error) {
         console.error('[KeyBERT] 키워드 추출 실패:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message 
-        });
+        sendResponse({ success: false, error: error.message });
     }
 }
 
@@ -266,57 +151,10 @@ async function handleNGramExtraction(text, sendResponse) {
 
     try {
         const ngrams = window.bertEmbedder.extractNGrams(text);
-        console.log(`[N-gram] ${ngrams.length}개 추출 완료`);
-        
-        sendResponse({ 
-            success: true, 
-            ngrams: ngrams 
-        });
+        sendResponse({ success: true, ngrams: ngrams });
     } catch (error) {
         console.error('[N-gram] 추출 실패:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message 
-        });
-    }
-}
-
-/**
- * DeepL 번역
- */
-async function handleTranslation(text, targetLang, sendResponse) {
-    try {
-        const deeplLang = targetLang === 'en' ? 'EN-US' : targetLang.toUpperCase();
-        
-        const response = await fetch(CONFIG.DEEPL_API_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `DeepL-Auth-Key ${CONFIG.DEEPL_API_KEY}`,
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-                'text': text,
-                'target_lang': deeplLang
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`DeepL API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log(`[TRANSLATE] 번역 완료: "${text.substring(0, 50)}..." → "${data.translations[0].text.substring(0, 50)}..."`);
-        
-        sendResponse({ 
-            success: true, 
-            translatedText: data.translations[0].text 
-        });
-    } catch (error) {
-        console.error('[TRANSLATE] 번역 실패:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message 
-        });
+        sendResponse({ success: false, error: error.message });
     }
 }
 
@@ -330,61 +168,39 @@ async function handleBERTFullProcess(text, sendResponse) {
     }
 
     try {
-        console.log('[BERT FULL] 통합 처리 시작');
         const startTime = performance.now();
-        
-        // 1. 문서 임베딩 생성 (1번만)
+
+        // 1. 문서 임베딩 생성
         const docEmbedding = await window.bertEmbedder.embed(text);
-        console.log(`[BERT FULL] 문서 임베딩 완료 (${(performance.now() - startTime).toFixed(0)}ms)`);
-        
-        // 2. N-gram 추출 (BERT 사용 안 함)
+
+        // 2. N-gram 추출
         const ngrams = window.bertEmbedder.extractNGrams(text);
-        console.log(`[BERT FULL] N-gram ${ngrams.length}개 추출`);
-        
-        // 3. 키워드 추출 (문서 임베딩 재사용)
+
+        // 3. 키워드 추출 (상위 30개 후보 중 Top 5)
         const candidates = ngrams.slice(0, 30);
-        const keywordResults = [];
-        
-        for (const candidate of candidates) {
-            const candEmbedding = await window.bertEmbedder.embed(candidate);
-            
-            // 코사인 유사도 계산
-            let dotProduct = 0;
-            let normA = 0;
-            let normB = 0;
-            
-            for (let i = 0; i < docEmbedding.length; i++) {
-                dotProduct += docEmbedding[i] * candEmbedding[i];
-                normA += docEmbedding[i] * docEmbedding[i];
-                normB += candEmbedding[i] * candEmbedding[i];
-            }
-            
-            const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-            keywordResults.push({ keyword: candidate, score: similarity });
-        }
-        
-        // 상위 5개 키워드 선택
-        const topKeywords = keywordResults
-            .sort((a, b) => b.score - a.score)
-            .slice(0, 5)
-            .map(k => k.keyword);
-        
+        const keywordResults = await window.bertEmbedder.extractKeywords(text, candidates); // text, candidates 필요
+        // 주의: extractKeywords 함수 내부 구현에 따라 text가 불필요할 수도 있지만, 
+        // 현 구조에서는 text를 받아 다시 임베딩하거나, 최적화된 내부 로직을 쓸 수 있음.
+        // offscreen-bert.js의 extractKeywords는 text를 받아 다시 임베딩하므로 비효율적일 수 있음.
+        // 하지만 일단 인터페이스 유지.
+
+        const topKeywords = keywordResults.map(k => k.keyword);
+
         const totalTime = (performance.now() - startTime).toFixed(0);
         console.log(`[BERT FULL] ✅ 완료 (${totalTime}ms): 키워드 ${topKeywords.length}개`);
-        
-        sendResponse({ 
-            success: true, 
+
+        sendResponse({
+            success: true,
             embedding: docEmbedding,
             tags: topKeywords
         });
     } catch (error) {
         console.error('[BERT FULL] 실패:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message 
+        sendResponse({
+            success: false,
+            error: error.message
         });
     }
 }
 
-console.log('[OFFSCREEN] Offscreen document 준비 완료.');
 
